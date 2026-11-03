@@ -81,6 +81,7 @@ class Character(SQLModel, table=True):
     sprite_base_path: Optional[str] = None
     style_prompt: str = ""
     color_palette: str = ""
+    reference_images_json: str = "[]"  # JSON array met referentie-afbeeldingen
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
 
@@ -127,6 +128,8 @@ class Episode(SQLModel, table=True):
     seo_tags: str = ""  # Komma-gescheiden
     thumbnail_prompt: str = ""
     thumbnail_path: Optional[str] = None
+    bg_music_path: str = ""
+    youtube_video_id: str = ""
     status: str = "draft"  # draft | scripting | scenes | audio | rendering | rendered | published
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
@@ -163,17 +166,27 @@ class Scene(SQLModel, table=True):
     episode_id: str = Field(foreign_key="episodes.id", index=True)
     scene_number: int = 1
     title: str = ""
+    chapter_type: str = "chapter"  # hook | intro | chapter | question | song | outro
+    speaker: str = ""
     narration_text: str = ""
+    phonetic_text: str = ""
     visual_prompt: str = ""
     background_prompt: str = ""
+    image_prompt: str = ""
     character_ids: str = ""  # Komma-gescheiden karakter ID's
     character_positions: str = ""  # JSON string met posities
+    use_2d_sprite: bool = False
+    sprite_config_json: str = ""  # JSON met sprite posities/schalen
+    image_history_json: str = "[]"  # JSON array met eerdere afbeeldingen
     animation_type: str = "ken_burns"  # ken_burns | pan_left | pan_right | zoom_in | zoom_out | static
     transition_type: str = "crossfade"  # crossfade | fade_black | slide_left | slide_right | wipe
+    sfx_track: str = ""
     duration_seconds: float = 8.0
+    pause_after_sec: float = 0.4
     background_image_path: Optional[str] = None
     composite_image_path: Optional[str] = None
     audio_path: Optional[str] = None
+    word_timestamps: str = "[]"  # JSON array met woord-timestamps
     start_time: float = 0.0
     status: str = "draft"  # draft | image_generated | audio_generated | complete
     created_at: datetime = Field(default_factory=_utcnow)

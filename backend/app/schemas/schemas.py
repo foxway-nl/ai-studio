@@ -104,8 +104,11 @@ class ExpressionResponse(BaseModel):
     id: str
     name: str
     image_path: str
+    image_url: Optional[str] = None
     mouth_open_path: Optional[str]
+    mouth_open_url: Optional[str] = None
     mouth_closed_path: Optional[str]
+    mouth_closed_url: Optional[str] = None
     created_at: datetime
 
 
@@ -118,8 +121,10 @@ class CharacterResponse(BaseModel):
     voice_id: str
     voice_provider: str
     sprite_base_path: Optional[str]
+    sprite_url: Optional[str] = None
     style_prompt: str
     color_palette: str
+    reference_images: list[str] = []
     expressions: list[ExpressionResponse] = []
     created_at: datetime
     updated_at: datetime
@@ -142,12 +147,14 @@ class EpisodeUpdate(BaseModel):
     description: Optional[str] = None
     episode_number: Optional[int] = Field(default=None, ge=1)
     target_duration_seconds: Optional[int] = Field(default=None, ge=60, le=1800)
+    target_duration: Optional[int] = Field(default=None, ge=60, le=1800)
     script_raw: Optional[str] = None
     script_final: Optional[str] = None
     seo_title: Optional[str] = None
     seo_description: Optional[str] = None
     seo_tags: Optional[str] = None
     thumbnail_prompt: Optional[str] = None
+    bg_music_path: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -158,6 +165,7 @@ class EpisodeResponse(BaseModel):
     description: str
     episode_number: int
     target_duration_seconds: int
+    target_duration: int = 720
     script_raw: str
     script_final: str
     seo_title: str
@@ -165,8 +173,13 @@ class EpisodeResponse(BaseModel):
     seo_tags: str
     thumbnail_prompt: str
     thumbnail_path: Optional[str]
+    bg_music_path: str = ""
     status: str
     scene_count: int = 0
+    render_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+    youtube_video_id: str = ""
+    guardrail_warnings: list[str] = []
     created_at: datetime
     updated_at: datetime
 
@@ -181,33 +194,75 @@ class SceneCreate(BaseModel):
     scene_number: Optional[int] = None
     order: Optional[int] = None
     title: str = ""
+    chapter_type: str = "chapter"
+    speaker: str = ""
     narration_text: Optional[str] = None
     narration: Optional[str] = None
+    phonetic_text: str = ""
     visual_prompt: str = ""
     background_prompt: str = ""
+    image_prompt: str = ""
     character_ids: Any = ""
     character_positions: str = ""
+    use_2d_sprite: bool = False
+    sprite_config_json: str = ""
     animation_type: str = "ken_burns"
     transition_type: str = "crossfade"
+    sfx_track: str = ""
     duration_seconds: Optional[float] = None
     duration: Optional[float] = None
+    pause_after_sec: Optional[float] = 0.4
 
 
 class SceneUpdate(BaseModel):
     scene_number: Optional[int] = None
     order: Optional[int] = None
     title: Optional[str] = None
+    chapter_type: Optional[str] = None
+    speaker: Optional[str] = None
     narration_text: Optional[str] = None
     narration: Optional[str] = None
+    phonetic_text: Optional[str] = None
     visual_prompt: Optional[str] = None
     background_prompt: Optional[str] = None
+    image_prompt: Optional[str] = None
     character_ids: Any = None
     character_positions: Optional[str] = None
+    use_2d_sprite: Optional[bool] = None
+    sprite_config_json: Optional[str] = None
     animation_type: Optional[str] = None
     transition_type: Optional[str] = None
+    sfx_track: Optional[str] = None
     duration_seconds: Optional[float] = None
     duration: Optional[float] = None
+    pause_after_sec: Optional[float] = None
     start_time: Optional[float] = None
+    background_image_path: Optional[str] = None
+    composite_image_path: Optional[str] = None
+    audio_path: Optional[str] = None
+    status: Optional[str] = None
+
+
+class SceneHistoryItem(BaseModel):
+    path: str
+    url: Optional[str] = None
+    prompt: str = ""
+    created_at: str = ""
+
+
+class GuardrailIssue(BaseModel):
+    level: str = "warning"  # warning | error
+    message: str
+    scene_id: Optional[str] = None
+    scene_number: Optional[int] = None
+
+
+class EpisodeGuardrailsResponse(BaseModel):
+    passed: bool = True
+    safety_score: int = 100
+    total_duration_seconds: float = 0.0
+    scene_count: int = 0
+    issues: list[GuardrailIssue] = []
 
 
 class SceneResponse(BaseModel):
@@ -216,23 +271,34 @@ class SceneResponse(BaseModel):
     scene_number: int
     order: int = 1
     title: str
+    chapter_type: str = "chapter"
+    speaker: str = ""
     narration_text: str = ""
     narration: str = ""
+    phonetic_text: str = ""
     visual_prompt: str = ""
     background_prompt: str = ""
+    image_prompt: str = ""
     character_ids: Any = ""
     character_positions: str = ""
+    use_2d_sprite: bool = False
+    sprite_config_json: str = ""
     animation_type: str = "ken_burns"
     transition_type: str = "crossfade"
+    sfx_track: str = ""
     duration_seconds: float = 8.0
     duration: float = 8.0
+    pause_after_sec: float = 0.4
     background_image_path: Optional[str] = None
     composite_image_path: Optional[str] = None
     image_url: Optional[str] = None
+    image_history: list[SceneHistoryItem] = []
     audio_path: Optional[str] = None
     audio_url: Optional[str] = None
+    word_timestamps: list[dict] = []
     start_time: float = 0.0
     status: str = "draft"
+    guardrail_warnings: list[str] = []
     created_at: datetime
     updated_at: datetime
 

@@ -1,10 +1,40 @@
 """SQLite database engine en sessie management via SQLModel."""
 
+import logging
+
+from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import settings
 
+logger = logging.getLogger(__name__)
+
 _engine = None
+
+# Kolommen die na de eerste release zijn toegevoegd. Omdat SQLite
+# `CREATE TABLE IF NOT EXISTS` bestaande tabellen niet aanpast, voegen we
+# ontbrekende kolommen hier idempotent toe bij het opstarten.
+_SCHEMA_PATCHES: dict[str, dict[str, str]] = {
+    "characters": {
+        "reference_images_json": "TEXT NOT NULL DEFAULT '[]'",
+    },
+    "episodes": {
+        "bg_music_path": "TEXT NOT NULL DEFAULT ''",
+        "youtube_video_id": "TEXT NOT NULL DEFAULT ''",
+    },
+    "scenes": {
+        "chapter_type": "TEXT NOT NULL DEFAULT 'chapter'",
+        "speaker": "TEXT NOT NULL DEFAULT ''",
+        "phonetic_text": "TEXT NOT NULL DEFAULT ''",
+        "image_prompt": "TEXT NOT NULL DEFAULT ''",
+        "use_2d_sprite": "INTEGER NOT NULL DEFAULT 0",
+        "sprite_config_json": "TEXT NOT NULL DEFAULT ''",
+        "image_history_json": "TEXT NOT NULL DEFAULT '[]'",
+        "sfx_track": "TEXT NOT NULL DEFAULT ''",
+        "pause_after_sec": "REAL NOT NULL DEFAULT 0.4",
+        "word_timestamps": "TEXT NOT NULL DEFAULT '[]'",
+    },
+}
 
 
 def get_engine():
@@ -13,19 +43,45 @@ def get_engine():
     if _engine is None:
         connect_args = {"check_same_thread": False}
         _engine = create_engine(
-            settings.database_url,
+            settings.resolved_database_url,
             echo=False,
             connect_args=connect_args,
         )
     return _engine
 
 
+def _apply_schema_patches() -> None:
+    """Voeg ontbrekende kolommen toe aan bestaande SQLite-tabellen."""
+    engine = get_engine()
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+
+    with engine.begin() as conn:
+        for table_name, columns in _SCHEMA_PATCHES.items():
+            if table_name not in table_names:
+                continue
+            existing = {col["name"] for col in inspector.get_columns(table_name)}
+            for column_name, definition in columns.items():
+                if column_name in existing:
+                    continue
+                conn.execute(
+                    text(
+                        f'ALTER TABLE "{table_name}" '
+                        f'ADD COLUMN "{column_name}" {definition}'
+                    )
+                )
+                logger.info(
+                    "Migratie: kolom %s.%s toegevoegd.", table_name, column_name
+                )
+
+
 def init_db() -> None:
-    """Maak alle tabellen aan als ze nog niet bestaan."""
+    """Maak alle tabellen aan als ze nog niet bestaan en migreer oude schema's."""
     from app.models import models as _  # noqa: F401 – registreer tabellen
 
     engine = get_engine()
     SQLModel.metadata.create_all(engine)
+    _apply_schema_patches()
 
 
 def get_session():
@@ -33,4 +89,3 @@ def get_session():
     engine = get_engine()
     with Session(engine) as session:
         yield session
-

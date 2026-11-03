@@ -10,7 +10,14 @@ class AppSettings(BaseSettings):
 
     # Paden
     data_dir: str = os.getenv("DATA_DIR", "/data")
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:////data/ai_studio.db")
+    database_url: str = os.getenv("DATABASE_URL", "")
+
+    @property
+    def resolved_database_url(self) -> str:
+        """Database-URL; leidt lokaal een SQLite-pad af uit DATA_DIR."""
+        if self.database_url:
+            return self.database_url
+        return f"sqlite:///{Path(self.data_dir).expanduser().resolve() / 'ai_studio.db'}"
 
     # App
     app_secret_key: str = "change-me-to-a-random-string"
@@ -72,6 +79,13 @@ class AppSettings(BaseSettings):
     @property
     def temp_dir(self) -> Path:
         p = Path(self.data_dir) / "temp"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def assets_dir(self) -> Path:
+        """Vaste media-assets zoals intro/outro bumpers."""
+        p = Path(self.data_dir) / "assets"
         p.mkdir(parents=True, exist_ok=True)
         return p
 
