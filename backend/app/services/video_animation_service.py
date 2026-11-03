@@ -459,6 +459,77 @@ class VideoAnimationService:
         logger.info("Video clip voor scène %s opgeslagen in %s (%s)", scene_id, dest_path, url)
         return str(dest_path), url or ""
 
+    # ─────────────────────────────────────────────────────────────
+    # Methode 4: Directe Lokale FFmpeg 2.5D Video-Animator (60fps)
+    # ─────────────────────────────────────────────────────────────
+
+    async def generate_local_2_5d_video(
+        self,
+        image_path: str,
+        output_path: str,
+        duration_seconds: float = 8.0,
+        fps: int = 60,
+        motion_type: str = "zoom_in",
+    ) -> str:
+        """Genereert direct via FFmpeg een 60fps 1080p vloeiende videoclip met cinematische camerabeweging."""
+        if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
+            raise ValueError(f"Start-Frame afbeelding niet gevonden op schijf: {image_path}")
+
+        duration = max(2.0, float(duration_seconds))
+        total_frames = int(duration * fps)
+
+        # Diverse vloeiende bewegingen (Ken Burns effect)
+        if motion_type == "zoom_out":
+            vf = (
+                f"scale=8000:-1,zoompan=z='max(1.25-0.0015*on,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={total_frames}:s=1920x1080:fps={fps},format=yuv420p"
+            )
+        elif motion_type == "pan_left":
+            vf = (
+                f"scale=8000:-1,zoompan=z=1.15:x='if(lte(on,1),(iw-iw/zoom)/2,max(0,x-1.5))':y='ih/2-(ih/zoom/2)':"
+                f"d={total_frames}:s=1920x1080:fps={fps},format=yuv420p"
+            )
+        elif motion_type == "pan_right":
+            vf = (
+                f"scale=8000:-1,zoompan=z=1.15:x='if(lte(on,1),0,min(iw-iw/zoom,x+1.5))':y='ih/2-(ih/zoom/2)':"
+                f"d={total_frames}:s=1920x1080:fps={fps},format=yuv420p"
+            )
+        else:  # zoom_in (standaard)
+            vf = (
+                f"scale=8000:-1,zoompan=z='min(zoom+0.0012,1.25)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={total_frames}:s=1920x1080:fps={fps},format=yuv420p"
+            )
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1",
+            "-i", image_path,
+            "-vf", vf,
+            "-t", str(duration),
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            output_path,
+        ]
+
+        logger.info("Start lokale FFmpeg 2.5D video rendering (duur: %.1fs, fps: %d)...", duration, fps)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err = stderr.decode("utf-8", errors="replace")
+            logger.error("FFmpeg 2.5D animatie faalde: %s", err[-300:])
+            raise RuntimeError(f"FFmpeg video creatie faalde: {err[-200:]}")
+
+        logger.info("Lokale 2.5D video succesvol gerenderd naar: %s", output_path)
+        return output_path
+
 
 video_animation_service = VideoAnimationService()
 

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -118,6 +119,7 @@ def _scene_to_response(scene: Scene) -> SceneResponse:
         pause_after_sec=scene.pause_after_sec,
         background_image_path=scene.background_image_path,
         composite_image_path=scene.composite_image_path,
+        image_path=scene.composite_image_path or scene.background_image_path,
         image_url=img_url,
         image_history=_history_items(scene.image_history_json),
         audio_path=scene.audio_path,
@@ -291,6 +293,11 @@ async def update_scene(
         update_dict["scene_number"] = update_dict.pop("order")
     if "duration" in update_dict and "duration_seconds" not in update_dict:
         update_dict["duration_seconds"] = update_dict.pop("duration")
+    if "image_path" in update_dict:
+        img_p = update_dict.pop("image_path")
+        if img_p:
+            update_dict["composite_image_path"] = img_p
+            update_dict["background_image_path"] = img_p
     if "character_ids" in update_dict and isinstance(
         update_dict["character_ids"], list
     ):
@@ -516,7 +523,14 @@ async def animate_scene(
     out_path = str(settings.clips_dir / f"scene_{scene_id}.mp4")
 
     try:
-        if engine == "wan":
+        if engine in ("local", "local_2_5d", "ffmpeg"):
+            clip_path = await video_animation_service.generate_local_2_5d_video(
+                image_path=start_frame,
+                output_path=out_path,
+                duration_seconds=scene.duration_seconds or 8.0,
+                motion_type=scene.animation_type or "zoom_in",
+            )
+        elif engine == "wan":
             clip_path = await video_animation_service.generate_wan_video(
                 image_path=start_frame,
                 motion_prompt=motion,
@@ -623,3 +637,106 @@ async def generate_motion_prompt_route(
     session.add(scene)
     session.commit()
     return {"scene_id": scene_id, "motion_prompt": prompt}
+
+
+@router.post("/api/scenes/{scene_id}/animate-local", response_model=AnimateSceneResponse)
+async def animate_scene_local(
+    scene_id: str,
+    session: Session = Depends(get_session),
+):
+    """Genereert direct en gratis een 60fps vloeiende 2.5D animatieclip via lokale FFmpeg."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scène niet gevonden.")
+
+    start_frame = scene.composite_image_path or scene.background_image_path
+    if not start_frame or not os.path.exists(start_frame) or os.path.getsize(start_frame) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Genereer of selecteer eerst een geldig Start-Frame plaatje voor deze scène.",
+        )
+
+    from app.services.video_animation_service import video_animation_service
+    out_path = str(settings.clips_dir / f"scene_{scene_id}.mp4")
+
+    try:
+        clip_path = await video_animation_service.generate_local_2_5d_video(
+            image_path=start_frame,
+            output_path=out_path,
+            duration_seconds=scene.duration_seconds or 8.0,
+            motion_type=scene.animation_type or "zoom_in",
+        )
+    except Exception as e:
+        logger.error("Lokale animatiefout scène %s: %s", scene_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    scene.video_clip_path = clip_path
+    scene.animation_engine = "local_2_5d"
+    scene.updated_at = datetime.now(timezone.utc)
+    session.add(scene)
+    session.commit()
+    session.refresh(scene)
+
+    from app.services.ffmpeg_service import ffmpeg_service
+    dur = await ffmpeg_service.get_duration(clip_path)
+
+    return AnimateSceneResponse(
+        scene_id=scene_id,
+        video_clip_url=to_media_url(clip_path) or "",
+        video_clip_path=clip_path,
+        duration=round(dur, 2),
+        animation_engine="local_2_5d",
+        message="Lokale 60fps 2.5D animatieclip succesvol gerenderd!",
+    )
+
+
+@router.post("/api/episodes/{episode_id}/animate-local-bulk")
+async def animate_episode_local_bulk(
+    episode_id: str,
+    session: Session = Depends(get_session),
+):
+    """Genereert voor alle scènes met een Start-Frame direct een lokale 60fps animatieclip."""
+    episode = session.get(Episode, episode_id)
+    if not episode:
+        raise HTTPException(status_code=404, detail="Aflevering niet gevonden.")
+
+    scenes = session.exec(
+        select(Scene).where(Scene.episode_id == episode_id).order_by(Scene.scene_number)
+    ).all()
+
+    if not scenes:
+        raise HTTPException(status_code=400, detail="Aflevering bevat geen scènes.")
+
+    from app.services.video_animation_service import video_animation_service
+    success_count = 0
+    skipped_count = 0
+
+    for sc in scenes:
+        start_frame = sc.composite_image_path or sc.background_image_path
+        if not start_frame or not os.path.exists(start_frame) or os.path.getsize(start_frame) == 0:
+            skipped_count += 1
+            continue
+
+        out_path = str(settings.clips_dir / f"scene_{sc.id}.mp4")
+        try:
+            clip_path = await video_animation_service.generate_local_2_5d_video(
+                image_path=start_frame,
+                output_path=out_path,
+                duration_seconds=sc.duration_seconds or 8.0,
+                motion_type=sc.animation_type or "zoom_in",
+            )
+            sc.video_clip_path = clip_path
+            sc.animation_engine = "local_2_5d"
+            sc.updated_at = datetime.now(timezone.utc)
+            session.add(sc)
+            success_count += 1
+        except Exception as e:
+            logger.warning("Fout bij bulk lokaal animeren van scène %s: %s", sc.id, e)
+
+    session.commit()
+    return {
+        "episode_id": episode_id,
+        "success_count": success_count,
+        "skipped_count": skipped_count,
+        "message": f"{success_count} scènes lokaal geanimeerd ({skipped_count} overgeslagen wegens ontbrekend start-frame).",
+    }

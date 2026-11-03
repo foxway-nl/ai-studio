@@ -56,6 +56,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("Fout bij database initialisatie: %s", e)
 
+    # Opschonen van eventuele dubbele test-projecten uit eerdere validatieruns
+    try:
+        from sqlmodel import Session, select
+        from app.core.database import get_engine
+        from app.models.models import Project
+        engine = get_engine()
+        with Session(engine) as session:
+            e2e_projects = session.exec(
+                select(Project).where(Project.name.like("%KidsEdu Avonturen E2E%")).order_by(Project.created_at.desc())
+            ).all()
+            if len(e2e_projects) > 1:
+                logger.info("Opschonen van %d dubbele E2E projecten...", len(e2e_projects) - 1)
+                for p in e2e_projects[1:]:
+                    session.delete(p)
+                session.commit()
+    except Exception as e:
+        logger.warning("Fout bij opschonen dubbele projecten: %s", e)
+
     yield
 
     logger.info("AI-Studio afgesloten.")

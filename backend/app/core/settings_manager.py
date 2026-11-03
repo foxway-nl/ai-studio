@@ -76,10 +76,31 @@ class SettingsManager:
         return None
 
     @staticmethod
+    def is_masked_value(value: Optional[str]) -> bool:
+        """Controleer of een waarde gemaskeerd is (sterretjes, bullets, etc.)."""
+        if not value:
+            return False
+        v = str(value).strip()
+        if any(c in v for c in ("•", "●", "·", "…")):
+            return True
+        if "****" in v or "***" in v:
+            return True
+        return False
+
+    @staticmethod
     def set(key: str, value: str, description: str = "") -> None:
-        """Sla een instelling op in de database en sync naar config.json."""
+        """Sla een instelling op in de database en sync naar config.json.
+        Gemaskeerde waarden (••• of ****) overschrijven NOOIT een bestaande echte sleutel!
+        """
         k = key.strip()
-        v = str(value).strip() if value is not None else ""
+        v = str(value).strip().strip('"').strip("'") if value is not None else ""
+
+        # Bescherm gevoelige API-sleutels tegen per ongeluk overschrijven met maskers
+        if SettingsManager.is_masked_value(v):
+            existing = SettingsManager.get(k)
+            if existing and not SettingsManager.is_masked_value(existing):
+                logger.info("Setting %s behoudt bestaande echte waarde; gemaskeerde invoer genegeerd.", k)
+                return
 
         # Sla op in SQLite
         try:

@@ -123,6 +123,8 @@ interface StoreState {
 
   // ─── Animation & Flow Actions ─────────────────────────────────────────────
   animateScene: (sceneId: string, engine?: string, motionPrompt?: string) => Promise<api.AnimateSceneResponse>;
+  animateSceneLocal: (sceneId: string) => Promise<api.AnimateSceneResponse>;
+  animateEpisodeLocalBulk: (episodeId: string) => Promise<any>;
   uploadSceneClip: (sceneId: string, file: File) => Promise<api.AnimateSceneResponse>;
   generateSceneMotionPrompt: (sceneId: string) => Promise<string>;
   exportGoogleFlow: (episodeId: string) => Promise<api.ExportFlowResponse>;
@@ -738,6 +740,43 @@ export const useStore = create<StoreState>((set, get) => ({
       return res;
     } catch (err: any) {
       const msg = err.response?.data?.detail || err.message || 'Animatie mislukt';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  animateSceneLocal: async (sceneId: string) => {
+    try {
+      const res = await api.animateSceneLocal(sceneId);
+      set((state) => ({
+        scenes: state.scenes.map((sc) =>
+          sc.id === sceneId
+            ? {
+                ...sc,
+                video_clip_url: res.video_clip_url,
+                video_clip_path: res.video_clip_path,
+                animation_engine: 'local_2_5d',
+              }
+            : sc
+        ),
+      }));
+      get().addToast('success', 'Lokale 60fps 2.5D animatie gereed!');
+      return res;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Lokale animatie mislukt';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  animateEpisodeLocalBulk: async (episodeId: string) => {
+    try {
+      const res = await api.animateEpisodeLocalBulk(episodeId);
+      await get().fetchScenes(episodeId);
+      get().addToast('success', res.message || 'Bulk lokale animatie voltooid!');
+      return res;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Bulk animatie mislukt';
       get().addToast('error', msg);
       throw err;
     }

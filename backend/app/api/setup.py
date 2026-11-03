@@ -243,8 +243,8 @@ async def test_gemini_api(data: Optional[GeminiTestRequest] = None):
     api_key = data.api_key.strip() if (data and data.api_key) else None
     res = await gemini_service.test_api_key(api_key=api_key)
 
-    # Als de test slaagt en er werd een sleutel meegegeven, sla hem direct op
-    if res.get("valid") and api_key:
+    # Als de test slaagt en er werd een echte (niet-gemaskeerde) sleutel meegegeven, sla hem direct op
+    if res.get("valid") and api_key and not settings_manager.is_masked_value(api_key):
         settings_manager.set("gemini_api_key", api_key, "Google Gemini API sleutel")
 
     return GeminiTestResponse(
@@ -253,9 +253,39 @@ async def test_gemini_api(data: Optional[GeminiTestRequest] = None):
         models=res.get("models", []),
         text_models=res.get("text_models", []),
         image_models=res.get("image_models", []),
+        video_models=res.get("video_models", []),
+        tts_models=res.get("tts_models", []),
         message=res.get("message", ""),
         error=res.get("error"),
     )
+
+
+@router.get("/models")
+async def get_discovered_models():
+    """Haal de live ontdekte modellen op uit de configuratie."""
+    raw = settings_manager.get("gemini_discovered_models")
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+
+    key = settings_manager.get("gemini_api_key")
+    if key and not settings_manager.is_masked_value(key):
+        try:
+            from app.services.gemini_service import discover_available_models
+            discovered = discover_available_models(key)
+            settings_manager.set("gemini_discovered_models", json.dumps(discovered))
+            return discovered
+        except Exception:
+            pass
+
+    return {
+        "text_models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+        "image_models": ["imagen-3.0-generate-002"],
+        "video_models": ["veo-2.0-generate-001"],
+        "tts_models": [],
+    }
 
 
 @router.get("/youtube-channel", response_model=YouTubeChannelResponse)

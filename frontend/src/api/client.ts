@@ -363,7 +363,17 @@ export interface ServiceStatus {
 
 export interface Settings {
   gemini_api_key: string;
+  gemini_api_key_set?: boolean;
   gemini_model?: string;
+  gemini_text_model?: string;
+  gemini_image_model?: string;
+  gemini_video_model?: string;
+  discovered_models?: {
+    text_models?: string[];
+    image_models?: string[];
+    video_models?: string[];
+    tts_models?: string[];
+  };
   default_image_provider?: string;
   wan_api_url?: string;
   wan_api_key?: string;
@@ -381,6 +391,8 @@ export interface GeminiTestResponse {
   models: string[];
   text_models: string[];
   image_models: string[];
+  video_models?: string[];
+  tts_models?: string[];
   message: string;
   error?: string | null;
 }
@@ -765,6 +777,41 @@ export async function animateScene(
     animation_engine: engine,
     motion_prompt: motionPrompt,
   });
+  return res.data;
+}
+
+export async function animateSceneLocal(sceneId: string): Promise<AnimateSceneResponse> {
+  const res = await client.post<AnimateSceneResponse>(`/scenes/${sceneId}/animate-local`);
+  return res.data;
+}
+
+export async function animateEpisodeLocalBulk(episodeId: string): Promise<{
+  episode_id: string;
+  success_count: number;
+  skipped_count: number;
+  message: string;
+}> {
+  const res = await client.post<{
+    episode_id: string;
+    success_count: number;
+    skipped_count: number;
+    message: string;
+  }>(`/episodes/${episodeId}/animate-local-bulk`);
+  return res.data;
+}
+
+export async function getDiscoveredModels(): Promise<{
+  text_models: string[];
+  image_models: string[];
+  video_models: string[];
+  tts_models: string[];
+}> {
+  const res = await client.get<{
+    text_models: string[];
+    image_models: string[];
+    video_models: string[];
+    tts_models: string[];
+  }>('/setup/models');
   return res.data;
 }
 

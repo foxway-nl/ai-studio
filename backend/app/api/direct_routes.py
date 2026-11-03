@@ -17,7 +17,7 @@ from sqlmodel import Session, select, func
 
 from app.core.config import settings
 from app.core.database import get_engine, get_session
-from app.core.settings_manager import settings_manager
+from app.core.settings_manager import SettingsManager, settings_manager
 from app.models.models import (
     AppSetting,
     Character,
@@ -517,10 +517,22 @@ async def direct_export_episode_flow(id: str):
 async def direct_get_settings():
     """Haal instellingen op als key-value mapping (geheimen gemaskeerd)."""
     all_s = settings_manager.get_all()
+    disc_raw = all_s.get("gemini_discovered_models", "")
+    disc = {}
+    if disc_raw:
+        try:
+            disc = json.loads(disc_raw)
+        except Exception:
+            disc = {}
+
     return {
         "gemini_api_key": settings_manager.get_masked("gemini_api_key") or "",
         "gemini_api_key_set": bool(all_s.get("gemini_api_key")),
         "gemini_model": all_s.get("gemini_model", "gemini-2.5-flash"),
+        "gemini_text_model": all_s.get("gemini_text_model", all_s.get("gemini_model", "gemini-2.5-flash")),
+        "gemini_image_model": all_s.get("gemini_image_model", "imagen-3.0-generate-002"),
+        "gemini_video_model": all_s.get("gemini_video_model", "veo-2.0-generate-001"),
+        "discovered_models": disc,
         "default_image_provider": all_s.get("default_image_provider", "gemini"),
         "wan_api_url": all_s.get("wan_api_url", settings.wan_api_url),
         "wan_api_key": settings_manager.get_masked("wan_api_key") or "",
@@ -541,6 +553,9 @@ async def direct_save_settings(data: Dict[str, Any]):
     key_mapping = {
         "gemini_api_key": "gemini_api_key",
         "gemini_model": "gemini_model",
+        "gemini_text_model": "gemini_text_model",
+        "gemini_image_model": "gemini_image_model",
+        "gemini_video_model": "gemini_video_model",
         "default_image_provider": "default_image_provider",
         "wan_api_url": "wan_api_url",
         "wan_api_key": "wan_api_key",
@@ -554,8 +569,8 @@ async def direct_save_settings(data: Dict[str, Any]):
     for frontend_k, val in data.items():
         if val is None:
             continue
-        text_value = str(val)
-        if "****" in text_value:
+        text_value = str(val).strip()
+        if SettingsManager.is_masked_value(text_value):
             # Gemaskeerde bestaande sleutels nooit overschrijven.
             continue
         backend_k = key_mapping.get(frontend_k, frontend_k)

@@ -16,6 +16,8 @@ import {
   Volume2,
   Play,
   LogOut,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import type { Settings, YouTubeChannelResponse, GeminiTestResponse } from '../api/client';
@@ -38,6 +40,9 @@ export const SetupCenter: React.FC = () => {
   const [formData, setFormData] = useState<Partial<Settings>>({
     gemini_api_key: '',
     gemini_model: 'gemini-2.5-flash',
+    gemini_text_model: 'gemini-2.5-flash',
+    gemini_image_model: 'imagen-3.0-generate-002',
+    gemini_video_model: 'veo-2.0-generate-001',
     default_image_provider: 'gemini',
     ollama_url: '',
     sd_webui_url: '',
@@ -47,13 +52,22 @@ export const SetupCenter: React.FC = () => {
     youtube_client_secret: '',
   });
 
-  // Gemini Test state
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+
+  // Gemini Test & Model Discovery state
   const [testingGemini, setTestingGemini] = useState(false);
   const [geminiResult, setGeminiResult] = useState<GeminiTestResponse | null>(null);
-  const [availableGeminiModels, setAvailableGeminiModels] = useState<string[]>([
+  const [availableTextModels, setAvailableTextModels] = useState<string[]>([
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-2.0-flash',
+  ]);
+  const [availableImageModels, setAvailableImageModels] = useState<string[]>([
+    'imagen-3.0-generate-002',
+    'imagen-3.0-fast-generate-001',
+  ]);
+  const [availableVideoModels, setAvailableVideoModels] = useState<string[]>([
+    'veo-2.0-generate-001',
   ]);
 
   // General service test state
@@ -98,7 +112,10 @@ export const SetupCenter: React.FC = () => {
       setFormData({
         gemini_api_key: settings.gemini_api_key || '',
         gemini_model: settings.gemini_model || 'gemini-2.5-flash',
-        default_image_provider: settings.default_image_provider || 'gemini',
+        gemini_text_model: settings.gemini_text_model || settings.gemini_model || 'gemini-2.5-flash',
+        gemini_image_model: settings.gemini_image_model || 'imagen-3.0-generate-002',
+        gemini_video_model: settings.gemini_video_model || 'veo-2.0-generate-001',
+        default_image_provider: settings.default_image_provider === 'pollinations' ? 'gemini' : (settings.default_image_provider || 'gemini'),
         wan_api_url: settings.wan_api_url || 'http://host.docker.internal:8188',
         wan_api_key: settings.wan_api_key || '',
         ollama_url: settings.ollama_url || 'http://host.docker.internal:11434',
@@ -108,6 +125,18 @@ export const SetupCenter: React.FC = () => {
         youtube_client_id: settings.youtube_client_id || '',
         youtube_client_secret: settings.youtube_client_secret || '',
       });
+
+      if (settings.discovered_models) {
+        if (settings.discovered_models.text_models && settings.discovered_models.text_models.length > 0) {
+          setAvailableTextModels(settings.discovered_models.text_models);
+        }
+        if (settings.discovered_models.image_models && settings.discovered_models.image_models.length > 0) {
+          setAvailableImageModels(settings.discovered_models.image_models);
+        }
+        if (settings.discovered_models.video_models && settings.discovered_models.video_models.length > 0) {
+          setAvailableVideoModels(settings.discovered_models.video_models);
+        }
+      }
     }
   }, [settings]);
 
@@ -117,23 +146,44 @@ export const SetupCenter: React.FC = () => {
 
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    await saveSettings(formData);
+    const dataToSave = { ...formData };
+    // Als de sleutel gemaskeerd is (sterretjes of bullets), niet meesturen zodat backend de echte sleutel behoudt
+    if (dataToSave.gemini_api_key && (dataToSave.gemini_api_key.includes('*') || dataToSave.gemini_api_key.includes('•'))) {
+      delete dataToSave.gemini_api_key;
+    }
+    await saveSettings(dataToSave);
     await fetchServicesStatus();
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 3000);
   };
 
-  // 1. Gemini Verbindingstest
+  // 1. Gemini Verbindingstest & Live Discovery
   const handleTestGemini = async () => {
     setTestingGemini(true);
     setGeminiResult(null);
     try {
-      const res = await testGeminiApiKey(formData.gemini_api_key);
+      const rawKey = formData.gemini_api_key?.trim();
+      const keyToSend = rawKey && !rawKey.includes('*') && !rawKey.includes('•') ? rawKey : undefined;
+      const res = await testGeminiApiKey(keyToSend);
       setGeminiResult(res);
-      if (res.valid && res.text_models && res.text_models.length > 0) {
-        setAvailableGeminiModels(res.text_models);
-        if (!formData.gemini_model || !res.text_models.includes(formData.gemini_model)) {
-          setFormData((prev) => ({ ...prev, gemini_model: res.text_models[0] }));
+      if (res.valid) {
+        if (res.text_models && res.text_models.length > 0) {
+          setAvailableTextModels(res.text_models);
+          if (!formData.gemini_text_model || !res.text_models.includes(formData.gemini_text_model)) {
+            setFormData((prev) => ({ ...prev, gemini_text_model: res.text_models[0], gemini_model: res.text_models[0] }));
+          }
+        }
+        if (res.image_models && res.image_models.length > 0) {
+          setAvailableImageModels(res.image_models);
+          if (!formData.gemini_image_model || !res.image_models.includes(formData.gemini_image_model)) {
+            setFormData((prev) => ({ ...prev, gemini_image_model: res.image_models![0] }));
+          }
+        }
+        if (res.video_models && res.video_models.length > 0) {
+          setAvailableVideoModels(res.video_models);
+          if (!formData.gemini_video_model || !res.video_models.includes(formData.gemini_video_model)) {
+            setFormData((prev) => ({ ...prev, gemini_video_model: res.video_models![0] }));
+          }
         }
       }
       await fetchServicesStatus();
@@ -266,18 +316,33 @@ export const SetupCenter: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2 space-y-1">
-              <label className="block text-xs font-semibold text-slate-300">Gemini API-sleutel</label>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold text-slate-300">Gemini API-sleutel</label>
+                {settings?.gemini_api_key_set && (
+                  <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    ✓ Reeds veilig opgeslagen in database
+                  </span>
+                )}
+              </div>
               <div className="relative">
                 <Key className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
                 <input
-                  type="password"
+                  type={showGeminiKey ? 'text' : 'password'}
                   value={formData.gemini_api_key || ''}
                   onChange={(e) => handleInputChange('gemini_api_key', e.target.value)}
-                  placeholder="AIzaSy..."
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-mono"
+                  placeholder={settings?.gemini_api_key_set ? '••••••••••••••••••••••••••••••••••••••• (behouden)' : 'AIzaSy...'}
+                  className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-mono"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowGeminiKey(!showGeminiKey)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200 transition-colors p-1"
+                  title={showGeminiKey ? 'Verberg sleutel' : 'Toon sleutel'}
+                >
+                  {showGeminiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
               <p className="text-[11px] text-slate-400 flex items-center gap-1.5 pt-1">
                 <HelpCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
@@ -293,22 +358,55 @@ export const SetupCenter: React.FC = () => {
               </p>
             </div>
 
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-slate-300">Voorkeursmodel</label>
-              <select
-                value={formData.gemini_model || 'gemini-2.5-flash'}
-                onChange={(e) => handleInputChange('gemini_model', e.target.value)}
-                className="w-full px-3 py-2.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                {availableGeminiModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m} {m.includes('2.5') ? '⚡ (Aanbevolen)' : ''}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[10px] text-slate-400 pt-1">
-                Dynamisch opgehaald uit je Gemini API sleutel.
-              </p>
+            {/* Live Gevonden Modellen Dropdowns */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-slate-800/80">
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">Tekstmodel (Scripts & Prompts)</label>
+                <select
+                  value={formData.gemini_text_model || formData.gemini_model || 'gemini-2.5-flash'}
+                  onChange={(e) => {
+                    handleInputChange('gemini_text_model', e.target.value);
+                    handleInputChange('gemini_model', e.target.value);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {availableTextModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m} {m.includes('2.5') ? '⚡' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">Beeldmodel (Start-Frames & Sprites)</label>
+                <select
+                  value={formData.gemini_image_model || 'imagen-3.0-generate-002'}
+                  onChange={(e) => handleInputChange('gemini_image_model', e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {availableImageModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-slate-300">Videomodel (Google Veo Animatie)</label>
+                <select
+                  value={formData.gemini_video_model || 'veo-2.0-generate-001'}
+                  onChange={(e) => handleInputChange('gemini_video_model', e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-100 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {availableVideoModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -322,20 +420,20 @@ export const SetupCenter: React.FC = () => {
               }`}
             >
               {geminiResult.valid ? (
-                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
               ) : (
-                <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <XCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-400" />
               )}
-              <div className="space-y-1">
+              <div className="space-y-1 flex-1">
                 <p className="font-semibold">{geminiResult.message}</p>
                 {geminiResult.error && (
-                  <p className="font-mono text-[11px] bg-rose-950/60 p-2 rounded border border-rose-800/40 text-rose-200">
+                  <p className="font-mono text-[11px] bg-rose-950/60 p-2.5 rounded-lg border border-rose-800/40 text-rose-200">
                     {geminiResult.error}
                   </p>
                 )}
                 {geminiResult.valid && geminiResult.text_models && (
                   <p className="text-[11px] opacity-80">
-                    Beschikbare tekstmodellen: {geminiResult.text_models.slice(0, 5).join(', ')}
+                    Ontdekte modellen: {geminiResult.text_models.slice(0, 4).join(', ')} | Beeld: {geminiResult.image_models?.slice(0, 2).join(', ') || 'Geen'} | Video: {geminiResult.video_models?.join(', ') || 'Veo'}
                   </p>
                 )}
               </div>
@@ -344,7 +442,7 @@ export const SetupCenter: React.FC = () => {
         </div>
 
         {/* ─────────────────────────────────────────────────────────────
-            2. BEELDGENERATIE & ENGINE KEUZE (Gemini, Pollinations, SD Forge)
+            2. BEELDGENERATIE & ENGINE KEUZE (Google Imagen & Gemini, SD WebUI Forge)
         ───────────────────────────────────────────────────────────── */}
         <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
           <div className="flex items-start justify-between gap-4">
@@ -366,12 +464,12 @@ export const SetupCenter: React.FC = () => {
             </div>
           </div>
 
-          {/* Engine Selector Radio Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Engine Selector Radio Cards (Alleen echte, geteste engines) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Optie 1: Gemini / Imagen 3 */}
             <label
               className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
-                formData.default_image_provider === 'gemini'
+                formData.default_image_provider !== 'sdwebui'
                   ? 'bg-indigo-600/15 border-indigo-500 ring-1 ring-indigo-500'
                   : 'bg-slate-800/60 border-slate-700/80 hover:border-slate-600'
               }`}
@@ -379,56 +477,26 @@ export const SetupCenter: React.FC = () => {
               <div className="flex items-start justify-between">
                 <div>
                   <span className="font-bold text-xs text-slate-100 flex items-center gap-1.5">
-                    <span>Google Gemini / Imagen 3</span>
+                    <span>Google Imagen 3 / Gemini Multimodaal</span>
                   </span>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Primaire cloud engine. Gebruikt je ingevulde Gemini sleutel (geen lokale software nodig).
+                    Primaire cloud engine. Gebruikt je ingevulde Gemini sleutel voor scènes en consistente karaktersprites.
                   </p>
                 </div>
                 <input
                   type="radio"
                   name="image_provider"
-                  checked={formData.default_image_provider === 'gemini'}
+                  checked={formData.default_image_provider !== 'sdwebui'}
                   onChange={() => handleInputChange('default_image_provider', 'gemini')}
                   className="mt-1"
                 />
               </div>
               <span className="mt-3 text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
-                ★ Aanbevolen
+                ★ Aanbevolen Cloud Engine
               </span>
             </label>
 
-            {/* Optie 2: Pollinations Flux API */}
-            <label
-              className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
-                formData.default_image_provider === 'pollinations'
-                  ? 'bg-indigo-600/15 border-indigo-500 ring-1 ring-indigo-500'
-                  : 'bg-slate-800/60 border-slate-700/80 hover:border-slate-600'
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <span className="font-bold text-xs text-slate-100 flex items-center gap-1.5">
-                    <span>Ingebouwde Cloud Generator</span>
-                  </span>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Gratis, sleutelloze Flux API via Pollinations. Werkt altijd direct out-of-the-box.
-                  </p>
-                </div>
-                <input
-                  type="radio"
-                  name="image_provider"
-                  checked={formData.default_image_provider === 'pollinations'}
-                  onChange={() => handleInputChange('default_image_provider', 'pollinations')}
-                  className="mt-1"
-                />
-              </div>
-              <span className="mt-3 text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
-                ✓ Zero-Config Fallback
-              </span>
-            </label>
-
-            {/* Optie 3: SD WebUI Forge */}
+            {/* Optie 2: SD WebUI Forge */}
             <label
               className={`p-4 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
                 formData.default_image_provider === 'sdwebui'
@@ -439,10 +507,10 @@ export const SetupCenter: React.FC = () => {
               <div className="flex items-start justify-between">
                 <div>
                   <span className="font-bold text-xs text-slate-100 flex items-center gap-1.5">
-                    <span>SD WebUI Forge</span>
+                    <span>SD WebUI Forge (Lokaal)</span>
                   </span>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Optionele lokale engine op poort 7860 voor custom SDXL checkpoints.
+                    Optionele lokale engine op poort 7860 voor custom SDXL checkpoints. Alleen vereist als je Forge lokaal hebt draaien.
                   </p>
                 </div>
                 <input
@@ -598,18 +666,16 @@ export const SetupCenter: React.FC = () => {
                   }}
                   className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 font-semibold"
                 >
-                  <optgroup label="Microsoft Edge TTS (Aanbevolen Cloud Stemmen)">
+                  <optgroup label="Microsoft Edge TTS (Aanbevolen Gratis Cloud Stemmen)">
                     <option value="edge_tts:nl-NL-FennaNeural">Fenna (nl-NL) - Vrolijk & Helder (Peuters/Kleuters)</option>
-                    <option value="edge_tts:nl-NL-MaartenNeural">Maarten (nl-NL) - Warm & Vriendelijk</option>
-                    <option value="edge_tts:nl-BE-DenaNeural">Dena (nl-BE) - Vlaams & Zacht</option>
+                    <option value="edge_tts:nl-NL-MaartenNeural">Maarten (nl-NL) - Warm & Vriendelijk (Verteller)</option>
+                    <option value="edge_tts:nl-BE-DenaNeural">Dena (nl-BE) - Vlaams & Zacht (Rustig)</option>
+                    <option value="edge_tts:nl-BE-ArnaudNeural">Arnaud (nl-BE) - Vlaams & Vertellend</option>
                     <option value="edge_tts:en-US-AnaNeural">Ana (en-US) - Vrolijke Kinderstem</option>
                   </optgroup>
-                  <optgroup label="Google Cloud WaveNet">
+                  <optgroup label="Google Cloud WaveNet (via Gemini Sleutel)">
                     <option value="google:nl-NL-Wavenet-A">Google WaveNet Vrouw (nl-NL)</option>
                     <option value="google:nl-NL-Wavenet-B">Google WaveNet Man (nl-NL)</option>
-                  </optgroup>
-                  <optgroup label="Piper TTS (Lokaal)">
-                    <option value="piper:nl_NL-mls-medium">Piper MLS Medium (nl-NL)</option>
                   </optgroup>
                 </select>
               </div>

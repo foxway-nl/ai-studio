@@ -24,12 +24,12 @@ from app.core.settings_manager import settings_manager
 
 logger = logging.getLogger(__name__)
 
-# Beschikbare stemmen per provider
+# Beschikbare stemmen per provider (uitsluitend werkende implementaties)
 AVAILABLE_VOICES = {
     "edge_tts": [
         {
             "id": "nl-NL-FennaNeural",
-            "name": "Fenna (Nederlands - Vrolijk & Helder, ideaal voor peuters/kleuters)",
+            "name": "Fenna (Nederlands - Vrolijk & Helder, aanbevolen voor kleuters)",
             "gender": "female",
             "language": "nl-NL",
             "recommended": True,
@@ -46,11 +46,18 @@ AVAILABLE_VOICES = {
             "name": "Dena (Vlaams - Zacht & liefdevol)",
             "gender": "female",
             "language": "nl-BE",
+            "recommended": True,
+        },
+        {
+            "id": "nl-BE-ArnaudNeural",
+            "name": "Arnaud (Vlaams - Rustig & vertellend)",
+            "gender": "male",
+            "language": "nl-BE",
             "recommended": False,
         },
         {
             "id": "en-US-AnaNeural",
-            "name": "Ana (Engels - Kindvriendelijke kinderstem)",
+            "name": "Ana (Engels - Kindvriendelijke peuterstem)",
             "gender": "female",
             "language": "en-US",
             "recommended": False,
@@ -76,38 +83,6 @@ AVAILABLE_VOICES = {
             "name": "Google Standaard Vrouw (nl-NL)",
             "gender": "female",
             "language": "nl-NL",
-            "recommended": False,
-        },
-    ],
-    "piper": [
-        {
-            "id": "nl_NL-mls-medium",
-            "name": "Piper MLS Medium (Lokaal ONNX)",
-            "gender": "female",
-            "language": "nl-NL",
-            "recommended": False,
-        },
-        {
-            "id": "nl_BE-nathalie-medium",
-            "name": "Piper Nathalie (Vlaams ONNX)",
-            "gender": "female",
-            "language": "nl-BE",
-            "recommended": False,
-        },
-    ],
-    "kokoro": [
-        {
-            "id": "af_bella",
-            "name": "Kokoro Bella (High-Quality)",
-            "gender": "female",
-            "language": "en/nl",
-            "recommended": False,
-        },
-        {
-            "id": "am_adam",
-            "name": "Kokoro Adam (Warm Male)",
-            "gender": "male",
-            "language": "en/nl",
             "recommended": False,
         },
     ],

@@ -266,6 +266,7 @@ class SceneUpdate(BaseModel):
     start_time: Optional[float] = None
     background_image_path: Optional[str] = None
     composite_image_path: Optional[str] = None
+    image_path: Optional[str] = None
     audio_path: Optional[str] = None
     status: Optional[str] = None
 
@@ -324,6 +325,7 @@ class SceneResponse(BaseModel):
     pause_after_sec: float = 0.4
     background_image_path: Optional[str] = None
     composite_image_path: Optional[str] = None
+    image_path: Optional[str] = None
     image_url: Optional[str] = None
     image_history: list[SceneHistoryItem] = []
     audio_path: Optional[str] = None
@@ -512,6 +514,8 @@ class GeminiTestResponse(BaseModel):
     models: list[str] = []
     text_models: list[str] = []
     image_models: list[str] = []
+    video_models: list[str] = []
+    tts_models: list[str] = []
     message: str = ""
     error: Optional[str] = None
 

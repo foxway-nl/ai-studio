@@ -21,6 +21,8 @@ import {
   Copy,
   Check,
   FileDown,
+  Zap,
+  Trash2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { SceneCard } from '../components/SceneCard';
@@ -52,6 +54,8 @@ export const EpisodeStudio: React.FC = () => {
     generateBulkAudio,
     selectSceneImage,
     animateScene,
+    animateSceneLocal,
+    animateEpisodeLocalBulk,
     uploadSceneClip,
     generateSceneMotionPrompt,
     exportGoogleFlow,
@@ -71,6 +75,8 @@ export const EpisodeStudio: React.FC = () => {
   const [generatingImages, setGeneratingImages] = useState<Record<string, boolean>>({});
   const [generatingAudios, setGeneratingAudios] = useState<Record<string, boolean>>({});
   const [animatingScenes, setAnimatingScenes] = useState<Record<string, boolean>>({});
+  const [animatingLocalScenes, setAnimatingLocalScenes] = useState<Record<string, boolean>>({});
+  const [isBulkLocalAnimating, setIsBulkLocalAnimating] = useState(false);
   const [generatingMotionPrompts, setGeneratingMotionPrompts] = useState<Record<string, boolean>>({});
   const [copiedPromptId, setCopiedPromptId] = useState<string | null>(null);
   const [isExportingFlow, setIsExportingFlow] = useState(false);
@@ -257,6 +263,66 @@ export const EpisodeStudio: React.FC = () => {
     setBulkVeoProgress(null);
   };
 
+  const handleAnimateSceneLocal = async (sceneId: string) => {
+    setAnimatingLocalScenes((prev) => ({ ...prev, [sceneId]: true }));
+    try {
+      await animateSceneLocal(sceneId);
+    } catch (err) {
+      console.error('Lokale animatiefout:', err);
+    } finally {
+      setAnimatingLocalScenes((prev) => ({ ...prev, [sceneId]: false }));
+    }
+  };
+
+  const handleBulkAnimateLocal = async () => {
+    if (!episodeId) return;
+    setIsBulkLocalAnimating(true);
+    try {
+      await animateEpisodeLocalBulk(episodeId);
+    } catch (err) {
+      console.error('Bulk lokale animatie fout:', err);
+    } finally {
+      setIsBulkLocalAnimating(false);
+    }
+  };
+
+  const handleToggleCharacterInScene = (sc: Scene, charId: string) => {
+    const currentCharIds = (sc.character_ids || []).slice();
+    const nextIds = currentCharIds.includes(charId)
+      ? currentCharIds.filter((id) => id !== charId)
+      : [...currentCharIds, charId];
+
+    const activeChars = characters.filter((c) => nextIds.includes(c.id));
+    const charsInScene = activeChars.map((c, idx) => ({
+      character_id: c.id,
+      name: c.name,
+      position: (idx === 0 ? 'left' : idx === 1 ? 'right' : 'center') as 'left' | 'center' | 'right',
+      emotion: 'blij',
+    }));
+
+    autoSaveScene(sc.id, {
+      character_ids: nextIds,
+      characters_in_scene: charsInScene,
+    });
+  };
+
+  const handleInjectCharacterDna = (sc: Scene) => {
+    const activeChars = characters.filter((c) => (sc.character_ids || []).includes(c.id));
+    if (!activeChars.length) {
+      alert('Vink eerst minimaal 1 karakter aan in deze scène.');
+      return;
+    }
+    const dnaList = activeChars.map((c) => `${c.name}: ${c.visual_dna_prompt || c.description || 'vrolijk kinderkarakter'}`).join('. ');
+    const newVisual = `${sc.visual_prompt ? sc.visual_prompt + ' | ' : ''}Characters: ${dnaList}. High quality 3D Pixar render, solid bright colors, kid-friendly.`;
+    const charNames = activeChars.map((c) => c.name).join(' and ');
+    const newMotion = `${sc.motion_prompt ? sc.motion_prompt + ' | ' : ''}${charNames} moving enthusiastically, smiling and interacting joyfully. Smooth 2D animation.`;
+
+    autoSaveScene(sc.id, {
+      visual_prompt: newVisual,
+      motion_prompt: newMotion,
+    });
+  };
+
   const toggleSceneCharacter = (characterId: string) => {
     if (!selectedScene) return;
     const current = selectedScene.character_ids || [];
@@ -432,6 +498,17 @@ export const EpisodeStudio: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            onClick={handleBulkAnimateLocal}
+            disabled={isBulkLocalAnimating || scenes.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/30 text-amber-200 text-xs font-semibold transition-colors disabled:opacity-50"
+            title="Animeer alle scènes direct lokaal met 60fps 2.5D camerabeweging en effecten"
+          >
+            <Zap className={`w-3.5 h-3.5 text-amber-400 ${isBulkLocalAnimating ? 'animate-spin' : ''}`} />
+            <span>{isBulkLocalAnimating ? 'Lokaal Animeren…' : '⚡ Bulk Lokaal Animeren (60fps)'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleExportFlow}
             disabled={isExportingFlow || scenes.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition-colors disabled:opacity-50"
@@ -507,6 +584,19 @@ export const EpisodeStudio: React.FC = () => {
                         Draft
                       </span>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (confirm(`Weet je zeker dat je Scène #${sc.order} wilt verwijderen?`)) {
+                          deleteScene(sc.id);
+                        }
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors ml-1"
+                      title="Verwijder deze scène"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
 
@@ -609,9 +699,19 @@ export const EpisodeStudio: React.FC = () => {
                       {/* Karakter DNA Selectie */}
                       {characters.length > 0 && (
                         <div>
-                          <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
-                            Karakters in beeld (Visueel DNA Lock):
-                          </label>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[10px] uppercase font-bold text-slate-400">
+                              Karakters in beeld (Visueel DNA Lock):
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleInjectCharacterDna(sc)}
+                              className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold"
+                              title="Voeg de visuele DNA-prompts van geselecteerde karakters toe aan de start-frame prompt"
+                            >
+                              🧬 DNA Injecteren
+                            </button>
+                          </div>
                           <div className="flex flex-wrap gap-1">
                             {characters.map((c) => {
                               const active = (sc.character_ids || []).includes(c.id);
@@ -619,13 +719,7 @@ export const EpisodeStudio: React.FC = () => {
                                 <button
                                   key={c.id}
                                   type="button"
-                                  onClick={() => {
-                                    const current = sc.character_ids || [];
-                                    const next = current.includes(c.id)
-                                      ? current.filter((id) => id !== c.id)
-                                      : [...current, c.id];
-                                    autoSaveScene(sc.id, { character_ids: next });
-                                  }}
+                                  onClick={() => handleToggleCharacterInScene(sc, c.id)}
                                   className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-all ${
                                     active
                                       ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200'
@@ -759,6 +853,17 @@ export const EpisodeStudio: React.FC = () => {
 
                     {/* Image-to-Video Actieknoppen */}
                     <div className="space-y-1.5 pt-2 border-t border-slate-800/80">
+                      <button
+                        type="button"
+                        onClick={() => handleAnimateSceneLocal(sc.id)}
+                        disabled={animatingLocalScenes[sc.id] || !sc.image_url}
+                        className="w-full flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white font-bold text-xs shadow-md shadow-amber-600/20 active:scale-95 transition-all disabled:opacity-50"
+                        title="Genereer direct een 60fps 2.5D video met cinematische camerabewegingen (Ken Burns / Pan / Zoom)"
+                      >
+                        <Zap className={`w-3.5 h-3.5 ${animatingLocalScenes[sc.id] ? 'animate-spin' : ''}`} />
+                        <span>{animatingLocalScenes[sc.id] ? 'Lokaal Renderen…' : '⚡ Animeer Lokaal (2.5D Camera & Beweging)'}</span>
+                      </button>
+
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
