@@ -76,7 +76,7 @@ interface StoreState {
   createCharacter: (data: CharacterCreate) => Promise<Character>;
   updateCharacter: (id: string, data: CharacterUpdate) => Promise<void>;
   deleteCharacter: (id: string) => Promise<void>;
-  generateSprite: (characterId: string) => Promise<void>;
+  generateSprite: (characterId: string, emotion?: string) => Promise<void>;
   uploadExpression: (characterId: string, name: string, file: File) => Promise<void>;
 
   // ─── Episode Actions ─────────────────────────────────────────────────────
@@ -115,6 +115,19 @@ interface StoreState {
   saveSettings: (data: Partial<Settings>) => Promise<void>;
   testConnection: (service: string) => Promise<api.TestConnectionResponse>;
   fetchServicesStatus: () => Promise<void>;
+  testGeminiApiKey: (apiKey?: string) => Promise<api.GeminiTestResponse>;
+  getAvailableVoices: () => Promise<api.VoicesMap>;
+  testVoice: (data: api.VoiceTestRequest) => Promise<api.VoiceTestResponse>;
+  getYouTubeChannel: () => Promise<api.YouTubeChannelResponse>;
+  disconnectYouTube: () => Promise<void>;
+
+  // ─── Animation & Flow Actions ─────────────────────────────────────────────
+  animateScene: (sceneId: string, engine?: string, motionPrompt?: string) => Promise<api.AnimateSceneResponse>;
+  uploadSceneClip: (sceneId: string, file: File) => Promise<api.AnimateSceneResponse>;
+  generateSceneMotionPrompt: (sceneId: string) => Promise<string>;
+  exportGoogleFlow: (episodeId: string) => Promise<api.ExportFlowResponse>;
+  uploadCharacterReference: (characterId: string, file: File) => Promise<void>;
+  deleteCharacterReference: (characterId: string, index: number) => Promise<void>;
 
   // ─── Task Progress ───────────────────────────────────────────────────────
   trackTask: (taskId: string, onComplete?: () => void, onError?: () => void) => void;
@@ -264,19 +277,19 @@ export const useStore = create<StoreState>((set, get) => ({
     }
   },
 
-  generateSprite: async (characterId: string) => {
+  generateSprite: async (characterId: string, emotion = 'blij') => {
     try {
-      const { task_id } = await api.generateSprite(characterId);
+      const { task_id } = await api.generateSprite(characterId, emotion);
       const projectId = get().currentProject?.id;
       get().trackTask(
         task_id,
         () => {
           if (projectId) get().fetchCharacters(projectId);
-          get().addToast('success', 'Sprite gegenereerd!');
+          get().addToast('success', `Sprite (${emotion}) gegenereerd!`);
         },
         () => get().addToast('error', 'Sprite generatie mislukt')
       );
-      get().addToast('info', 'Sprite wordt gegenereerd…');
+      get().addToast('info', `Sprite (${emotion}) wordt gegenereerd…`);
     } catch {
       get().addToast('error', 'Kon sprite niet genereren');
     }
@@ -675,6 +688,142 @@ export const useStore = create<StoreState>((set, get) => ({
       set({ servicesStatus });
     } catch {
       get().addToast('error', 'Kon service status niet laden');
+    }
+  },
+
+  testGeminiApiKey: async (apiKey?: string) => {
+    return await api.testGeminiApiKey(apiKey);
+  },
+
+  getAvailableVoices: async () => {
+    return await api.getAvailableVoices();
+  },
+
+  testVoice: async (data: api.VoiceTestRequest) => {
+    return await api.testVoice(data);
+  },
+
+  getYouTubeChannel: async () => {
+    return await api.getYouTubeChannel();
+  },
+
+  disconnectYouTube: async () => {
+    try {
+      await api.disconnectYouTube();
+      await get().fetchSettings();
+      await get().fetchServicesStatus();
+      get().addToast('info', 'YouTube account succesvol ontkoppeld.');
+    } catch {
+      get().addToast('error', 'Kon YouTube account niet ontkoppelen');
+    }
+  },
+
+  animateScene: async (sceneId: string, engine = 'veo', motionPrompt?: string) => {
+    try {
+      const res = await api.animateScene(sceneId, engine, motionPrompt);
+      set((state) => ({
+        scenes: state.scenes.map((sc) =>
+          sc.id === sceneId
+            ? {
+                ...sc,
+                video_clip_url: res.video_clip_url,
+                video_clip_path: res.video_clip_path,
+                animation_engine: res.animation_engine,
+                motion_prompt: motionPrompt || sc.motion_prompt,
+              }
+            : sc
+        ),
+      }));
+      get().addToast('success', res.message || 'Animatieclip gegenereerd!');
+      return res;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Animatie mislukt';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  uploadSceneClip: async (sceneId: string, file: File) => {
+    try {
+      const res = await api.uploadSceneClip(sceneId, file);
+      set((state) => ({
+        scenes: state.scenes.map((sc) =>
+          sc.id === sceneId
+            ? {
+                ...sc,
+                video_clip_url: res.video_clip_url,
+                video_clip_path: res.video_clip_path,
+                animation_engine: 'manual_upload',
+              }
+            : sc
+        ),
+      }));
+      get().addToast('success', 'Videoclip succesvol geüpload en gekoppeld!');
+      return res;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Upload mislukt';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  generateSceneMotionPrompt: async (sceneId: string) => {
+    try {
+      const res = await api.generateSceneMotionPrompt(sceneId);
+      set((state) => ({
+        scenes: state.scenes.map((sc) =>
+          sc.id === sceneId ? { ...sc, motion_prompt: res.motion_prompt } : sc
+        ),
+      }));
+      get().addToast('success', 'Motion prompt gegenereerd!');
+      return res.motion_prompt;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Kon motion prompt niet genereren';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  exportGoogleFlow: async (episodeId: string) => {
+    try {
+      const res = await api.exportGoogleFlow(episodeId);
+      get().addToast('success', res.message || 'Google Flow export gereed!');
+      if (res.zip_url) {
+        window.open(res.zip_url, '_blank');
+      }
+      return res;
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Export mislukt';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  uploadCharacterReference: async (characterId: string, file: File) => {
+    try {
+      const updated = await api.uploadCharacterReference(characterId, file);
+      set((state) => ({
+        characters: state.characters.map((c) => (c.id === characterId ? updated : c)),
+      }));
+      get().addToast('success', 'Referentie-afbeelding opgeslagen!');
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Upload mislukt';
+      get().addToast('error', msg);
+      throw err;
+    }
+  },
+
+  deleteCharacterReference: async (characterId: string, index: number) => {
+    try {
+      const updated = await api.deleteCharacterReference(characterId, index);
+      set((state) => ({
+        characters: state.characters.map((c) => (c.id === characterId ? updated : c)),
+      }));
+      get().addToast('success', 'Referentie-afbeelding verwijderd');
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message || 'Verwijderen mislukt';
+      get().addToast('error', msg);
+      throw err;
     }
   },
 

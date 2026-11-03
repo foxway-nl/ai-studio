@@ -83,11 +83,14 @@ async def publish_to_youtube(
         raise HTTPException(status_code=404, detail="Aflevering niet gevonden.")
 
     privacy_status = (payload.privacy_status if payload else None) or "private"
-    made_for_kids = (
-        payload.made_for_kids
-        if payload is not None and payload.made_for_kids is not None
-        else True
-    )
+    if payload is not None and payload.made_for_kids is not None:
+        made_for_kids = bool(payload.made_for_kids)
+    elif episode.made_for_kids is not None:
+        made_for_kids = bool(episode.made_for_kids)
+    elif episode.target_audience == "general":
+        made_for_kids = False
+    else:
+        made_for_kids = True
 
     # ORM-objecten zijn na het sluiten van de request-sessie niet meer veilig
     # te gebruiken; leg alle metadata nu vast voor de achtergrondtaak.

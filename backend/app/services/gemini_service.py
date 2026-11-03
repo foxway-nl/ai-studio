@@ -2,6 +2,8 @@
 
 Biedt scriptgeneratie voor kindervideo's, SEO-optimalisatie,
 beeldprompt-uitbreiding, Imagen 3 en Google Cloud TTS fallback.
+Dynamische configuratie: haalt bij elke aanroep vers de API-sleutel
+uit SQLite / /data/config.json met .strip() sanitization.
 """
 
 import base64
@@ -17,17 +19,15 @@ from app.core.settings_manager import settings_manager
 
 logger = logging.getLogger(__name__)
 
-# Nieuwe modellen eerst; de oudere namen blijven als fallback werken voor
-# omgevingen die nog geen toegang hebben tot de nieuwste Gemini-modellen.
+# Actuele Gemini modellen (2025/2026 standaard):
 _TEXT_MODEL_CANDIDATES = [
     "gemini-2.5-pro",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-pro",
 ]
 _FAST_MODEL_CANDIDATES = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash",
 ]
 _IMAGEN_MODEL = "imagen-3.0-generate-002"
 
@@ -51,29 +51,141 @@ class GeminiService:
     """Service voor interactie met de Google Gemini API en Imagen."""
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or settings_manager.get(
-            "gemini_api_key", settings.gemini_api_key
-        )
-        if self.api_key:
-            self._configure(self.api_key)
+        self._custom_key = api_key.strip() if api_key else None
+        self._configured_key: Optional[str] = None
+        current_key = self.get_api_key()
+        if current_key:
+            self._configure(current_key)
 
-    @staticmethod
-    def _configure(api_key: str) -> None:
-        import google.generativeai as genai
+    def get_api_key(self) -> str:
+        """Haal de actieve Gemini API-sleutel vers op uit de settings database."""
+        if self._custom_key:
+            return self._custom_key.strip()
+        key = settings_manager.get("gemini_api_key", settings.gemini_api_key) or ""
+        return key.strip()
 
-        genai.configure(api_key=api_key)
+    def _configure(self, api_key: str) -> None:
+        clean_key = api_key.strip()
+        if clean_key and clean_key != self._configured_key:
+            try:
+                import google.generativeai as genai
 
-    def _ensure_configured(self) -> None:
-        """Controleer of de Gemini API-sleutel is ingesteld."""
-        current_key = settings_manager.get("gemini_api_key", settings.gemini_api_key)
+                genai.configure(api_key=clean_key)
+                self._configured_key = clean_key
+            except Exception as exc:
+                logger.warning("Fout bij configureren google.generativeai: %s", exc)
+
+    def _ensure_configured(self) -> str:
+        """Controleer of de Gemini API-sleutel is ingesteld en configureer dynamisch."""
+        current_key = self.get_api_key()
         if not current_key:
             raise ValueError(
                 "Gemini API-sleutel is niet geconfigureerd. "
                 "Stel deze in via het Setup Centrum (http://localhost:3000/setup)."
             )
-        if current_key != self.api_key:
-            self.api_key = current_key
-            self._configure(self.api_key)
+        self._configure(current_key)
+        return current_key
+
+    async def test_api_key(self, api_key: Optional[str] = None) -> Dict[str, Any]:
+        """Test een Gemini API-sleutel via het officiële models-endpoint.
+        
+        Geeft een lijst van daadwerkelijk beschikbare modellen terug en
+        nauwkeurige foutcodes bij problemen.
+        """
+        key_to_test = (api_key.strip() if api_key else self.get_api_key())
+        if not key_to_test:
+            return {
+                "valid": False,
+                "status_code": 400,
+                "models": [],
+                "text_models": [],
+                "image_models": [],
+                "message": "Geen API-sleutel opgegeven.",
+                "error": "Vul een geldige Gemini API-sleutel in.",
+            }
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key_to_test}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw_models = data.get("models", [])
+                    all_model_names = [
+                        m.get("name", "").replace("models/", "")
+                        for m in raw_models
+                        if m.get("name")
+                    ]
+
+                    # Filter handige tekst- en beeldmodellen voor de UI dropdown
+                    text_models = [
+                        m for m in all_model_names
+                        if "gemini" in m.lower() and not "embedding" in m.lower() and not "aqa" in m.lower()
+                    ]
+                    # Sorteer zodat 2.5 en 2.0 bovenaan staan
+                    text_models.sort(reverse=True)
+
+                    image_models = [
+                        m for m in all_model_names
+                        if "imagen" in m.lower() or "image" in m.lower()
+                    ]
+                    if not image_models:
+                        image_models = ["imagen-3.0-generate-002"]
+
+                    # Configureer direct met deze geldige sleutel
+                    self._configure(key_to_test)
+
+                    return {
+                        "valid": True,
+                        "status_code": 200,
+                        "models": all_model_names,
+                        "text_models": text_models or _TEXT_MODEL_CANDIDATES,
+                        "image_models": image_models,
+                        "message": f"Gemini API-verbinding succesvol! {len(text_models)} modellen beschikbaar.",
+                        "error": None,
+                    }
+                else:
+                    # Google geeft gestructureerde foutmeldingen terug
+                    try:
+                        err_data = resp.json()
+                        err_msg = err_data.get("error", {}).get("message", resp.text)
+                        err_status = err_data.get("error", {}).get("status", f"HTTP_{resp.status_code}")
+                    except Exception:
+                        err_msg = resp.text[:300]
+                        err_status = f"HTTP_{resp.status_code}"
+
+                    return {
+                        "valid": False,
+                        "status_code": resp.status_code,
+                        "models": [],
+                        "text_models": [],
+                        "image_models": [],
+                        "message": "Verbinding met Gemini API mislukt.",
+                        "error": f"Google API Fout ({resp.status_code} {err_status}): {err_msg}",
+                    }
+        except httpx.ConnectError as ce:
+            logger.warning("Gemini verbindingsfout: %s", ce)
+            return {
+                "valid": False,
+                "status_code": 503,
+                "models": [],
+                "text_models": [],
+                "image_models": [],
+                "message": "Kan Google Gemini API servers niet bereiken.",
+                "error": f"Netwerkfout bij verbinden naar generativelanguage.googleapis.com: {ce}",
+            }
+        except Exception as exc:
+            logger.warning("Onverwachte fout bij testen Gemini sleutel: %s", exc)
+            return {
+                "valid": False,
+                "status_code": 500,
+                "models": [],
+                "text_models": [],
+                "image_models": [],
+                "message": "Onverwachte fout bij verificatie.",
+                "error": str(exc),
+            }
 
     async def _generate_text(
         self,
@@ -88,7 +200,16 @@ class GeminiService:
         import google.generativeai as genai
 
         self._ensure_configured()
-        models = model_candidates or _FAST_MODEL_CANDIDATES
+        
+        # Kijk of gebruiker een voorkeursmodel heeft opgeslagen
+        preferred_model = settings_manager.get("gemini_model", "").strip()
+        candidates = list(model_candidates or _FAST_MODEL_CANDIDATES)
+        if preferred_model and preferred_model not in candidates:
+            candidates.insert(0, preferred_model)
+        elif preferred_model and preferred_model in candidates:
+            candidates.remove(preferred_model)
+            candidates.insert(0, preferred_model)
+
         last_error: Optional[Exception] = None
 
         generation_config: Dict[str, Any] = {
@@ -98,7 +219,7 @@ class GeminiService:
         if json_mode:
             generation_config["response_mime_type"] = "application/json"
 
-        for model_name in models:
+        for model_name in candidates:
             try:
                 model = genai.GenerativeModel(model_name)
                 response = await model.generate_content_async(
@@ -110,7 +231,7 @@ class GeminiService:
                 if text.strip():
                     return text.strip()
                 last_error = RuntimeError(f"Leeg antwoord van model {model_name}")
-            except Exception as exc:  # model niet beschikbaar / quota
+            except Exception as exc:
                 last_error = exc
                 logger.warning(
                     "Gemini model %s faalde (%s); probeer volgend model.",
@@ -180,6 +301,7 @@ Geef je antwoord UITSLUITEND als een valide JSON-object met exact deze structuur
       "narration_text": "De enthousiaste gesproken stemtekst voor deze scène.",
       "phonetic_text": "Optionele fonetische uitspraakcorrectie",
       "visual_prompt": "Gedetailleerde Engelse prompt voor AI image generator, vibrant colors, friendly style",
+      "motion_prompt": "Engelse gedetailleerde bewegingsopdracht voor Veo/Wan (bv: Adam walks excitedly toward the tree, waving enthusiastically, lively 2D cartoon character animation)",
       "background_prompt": "Engelse beschrijving van de achtergrond omgeving zonder karakters",
       "animation_type": "ken_burns",
       "transition_type": "crossfade",
@@ -200,7 +322,7 @@ Geef je antwoord UITSLUITEND als een valide JSON-object met exact deze structuur
                 HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_LOW_AND_ABOVE,
                 HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
             }
-        except Exception:  # pragma: no cover – SDK-versie zonder enums
+        except Exception:
             safety_settings = None
 
         raw_text = await self._generate_text(
@@ -282,6 +404,66 @@ Geef UITSLUITEND een JSON-object terug:
             max_output_tokens=512,
         )
 
+    async def generate_scene_motion_prompt(
+        self,
+        scene_description: str,
+        narration: str = "",
+        characters: Optional[List[str]] = None,
+        animation_style: str = "vibrant 2D cartoon animation, fluid character actions",
+    ) -> str:
+        """Genereert een actiegerichte Engelse motion prompt voor Google Veo en Wan 2.1."""
+        chars_text = ", ".join(characters) if characters else "characters"
+        prompt = (
+            f"Write a specific, cinematic English motion prompt for an Image-to-Video AI model (Google Veo / Wan 2.1).\n"
+            f"The image already depicts the scene and characters. Describe ONLY how the characters and scene MOVE.\n"
+            f"Characters in scene: {chars_text}\n"
+            f"Scene Context: {scene_description}\n"
+            f"Narration / Dialogue: {narration}\n"
+            f"Style: {animation_style}\n"
+            f"Animation Requirements:\n"
+            f"- Describe clear, lively actions: walking, jumping, pointing, smiling, nodding, waving, clapping.\n"
+            f"- Make it energetic and suitable for a viral toddler/kids educational video.\n"
+            f"- Max 2 sentences, pure English motion description without preamble or quotes."
+        )
+        return await self._generate_text(
+            prompt,
+            model_candidates=_FAST_MODEL_CANDIDATES,
+            temperature=0.6,
+            max_output_tokens=256,
+        )
+
+    async def generate_image_prompt_with_dna(
+        self,
+        scene_description: str,
+        characters_dna: List[Dict[str, str]],
+        global_style: str = "3D Pixar style cute friendly animation, vibrant saturated colors",
+    ) -> str:
+        """Bouwt een Start-Frame prompt waarin het exacte Visuele DNA van alle karakters is verankerd."""
+        char_descriptions = []
+        for c in characters_dna:
+            name = c.get("name", "Character")
+            pos = c.get("position", "center")
+            dna = c.get("visual_dna", "") or c.get("description", "")
+            char_descriptions.append(
+                f"- {name} (positioned on the {pos} of the frame): {dna}"
+            )
+        chars_block = "\n".join(char_descriptions) if char_descriptions else "Cheerful friendly kids cartoon character"
+
+        prompt = (
+            f"Compose a detailed 16:9 widescreen Start-Frame prompt for an AI image generator.\n"
+            f"Global Art Style: {global_style}\n"
+            f"Scene Setting & Composition: {scene_description}\n"
+            f"Character Visual Lock & Placement:\n{chars_block}\n"
+            f"Strict Rules: Keep the exact character features, clothing, and colors. Clean composition, no text or watermarks, high quality, kid-friendly.\n"
+            f"Return only the final English image prompt."
+        )
+        return await self._generate_text(
+            prompt,
+            model_candidates=_FAST_MODEL_CANDIDATES,
+            temperature=0.4,
+            max_output_tokens=512,
+        )
+
     async def generate_with_imagen(
         self,
         prompt: str,
@@ -289,10 +471,7 @@ Geef UITSLUITEND een JSON-object terug:
         height: int = 1080,
     ) -> bytes:
         """Genereer een afbeelding met Imagen 3 via de REST API."""
-        self._ensure_configured()
-        api_key = self.api_key
-        if not api_key:
-            raise ValueError("Gemini API-sleutel ontbreekt voor Imagen.")
+        api_key = self._ensure_configured()
 
         aspect_ratio = "16:9" if width >= height else "1:1"
         url = (
@@ -333,7 +512,7 @@ Geef UITSLUITEND een JSON-object terug:
         """Zet tekst om naar spraak via Google Cloud Text-to-Speech REST API."""
         api_key = (
             settings_manager.get("google_tts_api_key", settings.google_tts_api_key)
-            or self.api_key
+            or self.get_api_key()
         )
         if not api_key:
             raise ValueError("Google TTS API sleutel ontbreekt.")
@@ -347,8 +526,8 @@ Geef UITSLUITEND een JSON-object terug:
             },
             "audioConfig": {
                 "audioEncoding": "MP3",
-                "speakingRate": 0.95,  # Iets rustiger voor jonge kinderen
-                "pitch": 2.0,          # Iets vrolijkere, hogere intonatie
+                "speakingRate": 0.95,
+                "pitch": 2.0,
             },
         }
 
@@ -361,14 +540,8 @@ Geef UITSLUITEND een JSON-object terug:
 
     async def test_connection(self) -> bool:
         """Lichtgewicht live-check van de Gemini API-sleutel."""
-        self._ensure_configured()
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models"
-            f"?key={self.api_key}"
-        )
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(url)
-            return resp.status_code == 200
+        res = await self.test_api_key()
+        return res.get("valid", False)
 
 
 gemini_service = GeminiService()

@@ -33,6 +33,9 @@ def _verify_project(project_id: str, session: Session) -> Project:
     return project
 
 
+from app.services.image_service import to_media_url
+
+
 def _episode_to_response(episode: Episode, session: Session) -> EpisodeResponse:
     """Converteer een Episode model naar EpisodeResponse met tellingen."""
     scenes = session.exec(
@@ -50,8 +53,7 @@ def _episode_to_response(episode: Episode, session: Session) -> EpisodeResponse:
     ).first()
     render_url = None
     if render_job and render_job.output_path:
-        output = render_job.output_path
-        render_url = output if output.startswith("/media/") else f"/media/renders/{Path(output).name}"
+        render_url = to_media_url(render_job.output_path)
 
     publish_job = session.exec(
         select(PublishJob)
@@ -84,7 +86,9 @@ def _episode_to_response(episode: Episode, session: Session) -> EpisodeResponse:
         seo_description=episode.seo_description,
         seo_tags=episode.seo_tags,
         thumbnail_prompt=episode.thumbnail_prompt,
-        thumbnail_path=episode.thumbnail_path,
+        thumbnail_path=to_media_url(episode.thumbnail_path),
+        target_audience=episode.target_audience or "kids",
+        made_for_kids=episode.made_for_kids,
         bg_music_path=episode.bg_music_path,
         status=episode.status,
         scene_count=scene_count,

@@ -2,8 +2,9 @@
 
 Ondersteunt:
 - OAuth2 flow (autorisatie URL, callback uitwisseling, tokenopslag)
+- Live kanaal info & avatar ophalen
 - Resumable video upload met status & voortgang
-- Verplichte COPPA 'Made for Kids' markering (`selfDeclaredMadeForKids=True`)
+- Keuze tussen Mode A (Kids / COPPA `selfDeclaredMadeForKids=True`) en Mode B (Algemeen `selfDeclaredMadeForKids=False`)
 - Automatische thumbnail upload en metadata beheer
 """
 
@@ -27,6 +28,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube",
     "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/youtube.readonly",
 ]
 
 
@@ -38,8 +40,8 @@ class YouTubeService:
 
     def _get_client_config(self) -> Dict[str, Any]:
         """Haal OAuth2 client configuratie op uit de settings database."""
-        client_id = settings_manager.get("youtube_client_id", settings.youtube_client_id)
-        client_secret = settings_manager.get("youtube_client_secret", settings.youtube_client_secret)
+        client_id = settings_manager.get("youtube_client_id", settings.youtube_client_id).strip()
+        client_secret = settings_manager.get("youtube_client_secret", settings.youtube_client_secret).strip()
         if not client_id or not client_secret:
             raise ValueError(
                 "YouTube Client ID en Secret zijn niet ingesteld. "
@@ -115,6 +117,44 @@ class YouTubeService:
             logger.error("Fout bij laden YouTube credentials: %s", e)
             return None
 
+    def get_channel_info(self) -> Optional[Dict[str, Any]]:
+        """Haal profiel en kanaalstatistieken op van het actieve gekoppelde account."""
+        creds = self.get_credentials()
+        if not creds:
+            return None
+        try:
+            youtube = build("youtube", "v3", credentials=creds)
+            res = youtube.channels().list(part="snippet,statistics", mine=True).execute()
+            items = res.get("items", [])
+            if not items:
+                return None
+            ch = items[0]
+            snippet = ch.get("snippet", {})
+            stats = ch.get("statistics", {})
+            thumbs = snippet.get("thumbnails", {})
+            avatar_url = (
+                thumbs.get("default", {}).get("url")
+                or thumbs.get("medium", {}).get("url")
+                or ""
+            )
+            return {
+                "connected": True,
+                "id": ch.get("id"),
+                "title": snippet.get("title", "Gekoppeld YouTube Kanaal"),
+                "description": snippet.get("description", ""),
+                "custom_url": snippet.get("customUrl", ""),
+                "avatar_url": avatar_url,
+                "subscriber_count": stats.get("subscriberCount", "0"),
+                "video_count": stats.get("videoCount", "0"),
+            }
+        except Exception as e:
+            logger.warning("Fout bij ophalen YouTube kanaal info: %s", e)
+            return None
+
+    def disconnect(self) -> None:
+        """Verwijder de gekoppelde YouTube OAuth sessie."""
+        settings_manager.delete("youtube_oauth_token")
+
     def upload_video(
         self,
         video_path: str,
@@ -142,8 +182,8 @@ class YouTubeService:
             },
             "status": {
                 "privacyStatus": privacy_status,
-                # COPPA verplichting voor virale kindervideo's:
-                "selfDeclaredMadeForKids": made_for_kids,
+                # COPPA verplichting voor virale kindervideo's of standaard video:
+                "selfDeclaredMadeForKids": bool(made_for_kids),
             },
         }
 
@@ -204,4 +244,3 @@ class YouTubeService:
 
 
 youtube_service = YouTubeService()
-

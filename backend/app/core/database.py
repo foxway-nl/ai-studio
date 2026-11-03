@@ -16,9 +16,16 @@ _engine = None
 # ontbrekende kolommen hier idempotent toe bij het opstarten.
 _SCHEMA_PATCHES: dict[str, dict[str, str]] = {
     "characters": {
+        "voice_pitch": "TEXT NOT NULL DEFAULT '+15Hz'",
+        "voice_rate": "TEXT NOT NULL DEFAULT '+0%'",
+        "style_prompt": "TEXT NOT NULL DEFAULT ''",
+        "visual_dna_prompt": "TEXT NOT NULL DEFAULT ''",
+        "color_palette": "TEXT NOT NULL DEFAULT ''",
         "reference_images_json": "TEXT NOT NULL DEFAULT '[]'",
     },
     "episodes": {
+        "target_audience": "TEXT NOT NULL DEFAULT 'kids'",
+        "made_for_kids": "INTEGER NOT NULL DEFAULT 1",
         "bg_music_path": "TEXT NOT NULL DEFAULT ''",
         "youtube_video_id": "TEXT NOT NULL DEFAULT ''",
     },
@@ -27,6 +34,13 @@ _SCHEMA_PATCHES: dict[str, dict[str, str]] = {
         "speaker": "TEXT NOT NULL DEFAULT ''",
         "phonetic_text": "TEXT NOT NULL DEFAULT ''",
         "image_prompt": "TEXT NOT NULL DEFAULT ''",
+        "motion_prompt": "TEXT NOT NULL DEFAULT ''",
+        "video_clip_path": "TEXT DEFAULT NULL",
+        "animation_engine": "TEXT NOT NULL DEFAULT 'veo'",
+        "character_ids": "TEXT NOT NULL DEFAULT ''",
+        "characters_in_scene": "TEXT NOT NULL DEFAULT '[]'",
+        "character_positions": "TEXT NOT NULL DEFAULT ''",
+        "active_speaker": "TEXT NOT NULL DEFAULT 'verteller'",
         "use_2d_sprite": "INTEGER NOT NULL DEFAULT 0",
         "sprite_config_json": "TEXT NOT NULL DEFAULT ''",
         "image_history_json": "TEXT NOT NULL DEFAULT '[]'",

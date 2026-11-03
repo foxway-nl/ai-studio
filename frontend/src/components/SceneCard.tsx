@@ -6,6 +6,7 @@ import {
   Sparkles,
   Trash2,
   AlertTriangle,
+  Video,
 } from 'lucide-react';
 import type { Scene } from '../api/client';
 import { StatusBadge } from './StatusBadge';
@@ -59,6 +60,14 @@ export const SceneCard: React.FC<SceneCardProps> = ({
         <div className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-xs font-bold text-slate-200">
           #{scene.order}
         </div>
+
+        {/* Video Animation Badge */}
+        {scene.video_clip_url && (
+          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md bg-rose-600/90 text-white text-[10px] font-bold flex items-center gap-1 shadow-md">
+            <Video className="w-2.5 h-2.5" />
+            <span>Animatie</span>
+          </div>
+        )}
 
         {/* Duration tag */}
         <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-md bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-[11px] font-medium text-slate-300 flex items-center gap-1">

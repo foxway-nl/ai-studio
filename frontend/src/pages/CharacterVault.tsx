@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   Users,
   Plus,
@@ -7,11 +7,23 @@ import {
   Trash2,
   Smile,
   Layers,
+  Volume2,
+  Play,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import type { Character } from '../api/client';
+
+const EMOTIONS = [
+  { id: 'blij', label: 'Blij & Enthousiast' },
+  { id: 'verbaasd', label: 'Verbaasd & Oogjes wijd' },
+  { id: 'denkend', label: 'Denkend & Vragend' },
+  { id: 'wijzend', label: 'Wijzend naar iets' },
+  { id: 'verdrietig', label: 'Verdrietig / Troost nodig' },
+];
 
 export const CharacterVault: React.FC = () => {
   const {
@@ -22,22 +34,39 @@ export const CharacterVault: React.FC = () => {
     charactersLoading,
     fetchCharacters,
     createCharacter,
+    updateCharacter,
     deleteCharacter,
     generateSprite,
     uploadExpression,
+    uploadCharacterReference,
+    deleteCharacterReference,
+    testVoice,
   } = useStore();
 
   const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null);
   const [isNewCharModalOpen, setIsNewCharModalOpen] = useState(false);
+
+  // New Char form state
   const [newCharName, setNewCharName] = useState('');
   const [newCharDesc, setNewCharDesc] = useState('');
   const [newCharPersonality, setNewCharPersonality] = useState('Nieuwsgierig en altijd vrolijk');
-  const [newCharVoice, setNewCharVoice] = useState('nl_NL-mls-medium');
-  const [newCharStyle, setNewCharStyle] = useState('3D Pixar style cute friendly animal character');
+  const [newCharVoice, setNewCharVoice] = useState('nl-NL-FennaNeural');
+  const [newCharVoiceProvider, setNewCharVoiceProvider] = useState('edge_tts');
+  const [newCharVoicePitch, setNewCharVoicePitch] = useState('+15Hz');
+  const [newCharVoiceRate, setNewCharVoiceRate] = useState('+0%');
+  const [newCharStyle, setNewCharStyle] = useState('3D Pixar style cute friendly character');
+  const [newCharVisualDna, setNewCharVisualDna] = useState('5-year-old child, big expressive eyes, curly brown hair, signature blue overalls with bright yellow shirt');
 
+  // Sprite & Expression generation state
+  const [selectedEmotion, setSelectedEmotion] = useState('blij');
   const [expressionName, setExpressionName] = useState('blij');
   const [expressionFile, setExpressionFile] = useState<File | null>(null);
   const [isGeneratingSprite, setIsGeneratingSprite] = useState(false);
+
+  // Voice Tester state
+  const [isTestingVoice, setIsTestingVoice] = useState(false);
+  const [voiceAudioUrl, setVoiceAudioUrl] = useState<string | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (currentProject) {
@@ -66,7 +95,11 @@ export const CharacterVault: React.FC = () => {
       description: newCharDesc.trim(),
       personality: newCharPersonality.trim(),
       voice_id: newCharVoice,
+      voice_provider: newCharVoiceProvider,
+      voice_pitch: newCharVoicePitch,
+      voice_rate: newCharVoiceRate,
       style_prompt: newCharStyle.trim(),
+      visual_dna_prompt: newCharVisualDna.trim(),
     });
 
     setNewCharName('');
@@ -78,9 +111,30 @@ export const CharacterVault: React.FC = () => {
   const handleGenerateSprite = async (charId: string) => {
     setIsGeneratingSprite(true);
     try {
-      await generateSprite(charId);
+      await generateSprite(charId, selectedEmotion);
     } finally {
       setIsGeneratingSprite(false);
+    }
+  };
+
+  const handleTestCharacterVoice = async (voiceId: string, provider = 'edge_tts', pitch = '+15Hz', rate = '+0%') => {
+    setIsTestingVoice(true);
+    try {
+      const res = await testVoice({
+        voice_id: voiceId,
+        voice_provider: provider,
+        pitch: pitch,
+        rate: rate,
+        text: 'Hoi allemaal! Vandaag gaan we samen op avontuur, doen jullie mee?',
+      });
+      setVoiceAudioUrl(res.audio_url);
+      setTimeout(() => {
+        if (audioPlayerRef.current) {
+          audioPlayerRef.current.play().catch(() => {});
+        }
+      }, 100);
+    } finally {
+      setIsTestingVoice(false);
     }
   };
 
@@ -102,12 +156,11 @@ export const CharacterVault: React.FC = () => {
             <span>Karakter Kluis (Character Vault)</span>
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Beheer herbruikbare 2.5D personages, expressies en stemmen voor al je educatieve video's.
+            Beheer 2.5D personages, emotiesprites en kinderstemmen met automatische lip-sync ondersteuning.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Project Dropdown Selector */}
           <div className="relative">
             <select
               value={currentProject?.id || ''}
@@ -171,7 +224,7 @@ export const CharacterVault: React.FC = () => {
                   >
                     <div className="flex items-start gap-4">
                       {/* Avatar preview */}
-                      <div className="w-16 h-16 rounded-xl bg-slate-950 border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center">
+                      <div className="w-16 h-16 rounded-xl bg-slate-950 border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center p-1">
                         {char.sprite_url ? (
                           <img
                             src={char.sprite_url}
@@ -211,7 +264,7 @@ export const CharacterVault: React.FC = () => {
                         {char.expressions?.length || 0} expressies
                       </span>
                       <span className="text-[11px] font-mono text-indigo-400 truncate max-w-[120px]">
-                        {char.voice_id}
+                        {char.voice_id || 'nl-NL-FennaNeural'}
                       </span>
                     </div>
                   </div>
@@ -232,7 +285,7 @@ export const CharacterVault: React.FC = () => {
                 </span>
               </div>
 
-              {/* Sprite Visualizer & Generator */}
+              {/* 2.5D Sprite Visualizer & Generator */}
               <div className="flex flex-col items-center p-4 rounded-xl bg-slate-950 border border-slate-800 text-center space-y-3">
                 <div className="w-36 h-36 rounded-2xl bg-slate-900 border border-slate-800 overflow-hidden flex items-center justify-center p-2">
                   {selectedCharacter.sprite_url ? (
@@ -249,58 +302,188 @@ export const CharacterVault: React.FC = () => {
                   )}
                 </div>
 
-                <button
-                  onClick={() => handleGenerateSprite(selectedCharacter.id)}
-                  disabled={isGeneratingSprite}
-                  className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/20 disabled:opacity-50"
-                >
-                  <Sparkles className="w-4 h-4" />
-                  <span>{isGeneratingSprite ? 'Sprite Genereren...' : 'Genereer 2.5D Sprite'}</span>
-                </button>
+                {/* Emotie Kiezer voor Generatie */}
+                <div className="w-full space-y-2 text-left">
+                  <label className="block text-[11px] font-semibold text-slate-300">
+                    Kies Emotie voor Sprite:
+                  </label>
+                  <select
+                    value={selectedEmotion}
+                    onChange={(e) => setSelectedEmotion(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-100 text-xs font-semibold"
+                  >
+                    {EMOTIONS.map((em) => (
+                      <option key={em.id} value={em.id}>
+                        {em.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    onClick={() => handleGenerateSprite(selectedCharacter.id)}
+                    disabled={isGeneratingSprite}
+                    className="w-full flex items-center justify-center gap-2 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-md shadow-indigo-600/20 disabled:opacity-50"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>
+                      {isGeneratingSprite
+                        ? 'Sprite Genereren...'
+                        : `Genereer 2.5D Sprite (${selectedEmotion})`}
+                    </span>
+                  </button>
+                </div>
               </div>
 
-              {/* Character Attributes */}
-              <div className="space-y-3 text-xs">
-                <div>
-                  <span className="text-slate-400 font-medium">Persoonlijkheid:</span>
-                  <p className="text-slate-200 mt-0.5">{selectedCharacter.personality || 'Niet ingevuld'}</p>
+              {/* Stem Tester voor dit karakter */}
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                    <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Karakterstem</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleTestCharacterVoice(
+                        selectedCharacter.voice_id || 'nl-NL-FennaNeural',
+                        selectedCharacter.voice_provider || 'edge_tts',
+                        selectedCharacter.voice_pitch || '+15Hz',
+                        selectedCharacter.voice_rate || '+0%'
+                      )
+                    }
+                    disabled={isTestingVoice}
+                    className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1 transition-all"
+                  >
+                    {isTestingVoice ? (
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Play className="w-3 h-3 fill-current" />
+                    )}
+                    <span>Luister stem</span>
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-400 font-mono">
+                  {selectedCharacter.voice_id || 'nl-NL-FennaNeural'} ({selectedCharacter.voice_pitch || '+15Hz'})
                 </div>
 
-                <div>
-                  <span className="text-slate-400 font-medium">Stijl Prompt:</span>
-                  <p className="text-slate-200 mt-0.5 font-mono text-[11px] bg-slate-950 p-2 rounded border border-slate-800">
-                    {selectedCharacter.style_prompt || '3D Pixar style cute friendly animal'}
+                {voiceAudioUrl && (
+                  <audio ref={audioPlayerRef} controls src={voiceAudioUrl} className="w-full h-7 pt-1" />
+                )}
+              </div>
+
+              {/* Visueel DNA & Consistentie Lock (Prompt + Referentiebeelden) */}
+              <div className="space-y-3.5 pt-3 border-t border-slate-800">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Visueel DNA Lock (Consistentie)</span>
+                  </h4>
+                  <span className="text-[10px] text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">
+                    Vast Uiterlijk
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-semibold text-slate-400">
+                    Vaste Engelse Beschrijving (Kleding, Leeftijd, Kapsel):
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={selectedCharacter.visual_dna_prompt || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedCharacter((prev) => (prev ? { ...prev, visual_dna_prompt: val } : null));
+                      updateCharacter(selectedCharacter.id, { visual_dna_prompt: val });
+                    }}
+                    placeholder="5-year-old toddler, big friendly brown eyes, short curly hair, wearing blue denim overalls and a bright yellow t-shirt, cheerful smile"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-100 text-xs font-mono placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 leading-relaxed"
+                  />
+                  <p className="text-[10px] text-slate-500 leading-tight">
+                    Wordt automatisch samengevoegd met scène-prompts zodat dit karakter er in elke scène identiek uitziet.
                   </p>
                 </div>
+
+                {/* Referentiebeelden Uploader (Max 3) */}
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
+                    <span>Referentiebeelden (max 3):</span>
+                    <label className="text-indigo-400 hover:text-indigo-300 cursor-pointer flex items-center gap-1">
+                      <Upload className="w-3 h-3" />
+                      <span>Upload Referentie</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files[0]) {
+                            uploadCharacterReference(selectedCharacter.id, e.target.files[0]);
+                          }
+                        }}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {(selectedCharacter.reference_image_urls || []).length > 0 ? (
+                      selectedCharacter.reference_image_urls?.map((url, idx) => (
+                        <div
+                          key={idx}
+                          className="group/ref relative aspect-square rounded-xl bg-black border border-slate-800 overflow-hidden"
+                        >
+                          <img src={url} alt={`Referentie ${idx + 1}`} className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => deleteCharacterReference(selectedCharacter.id, idx)}
+                            className="absolute top-1 right-1 p-1 rounded-md bg-rose-600/80 hover:bg-rose-600 text-white opacity-0 group-hover/ref:opacity-100 transition-opacity"
+                            title="Verwijder referentie"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="col-span-3 p-3 rounded-xl border border-dashed border-slate-800 text-center text-[11px] text-slate-500">
+                        Nog geen referentiebeelden geüpload. Upload er tot 3 voor maximale consistentie.
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              {/* Expressions Section */}
-              <div className="space-y-3 pt-4 border-t border-slate-800">
+              {/* Expressions Section met Mond-Sprites Status */}
+              <div className="space-y-3 pt-3 border-t border-slate-800">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center justify-between">
                   <span>Expressies ({selectedCharacter.expressions?.length || 0})</span>
-                  <span className="text-[10px] text-slate-400 lowercase">t.b.v. lip-sync</span>
+                  <span className="text-[10px] text-emerald-400 font-semibold lowercase">
+                    ✓ mond-sprites lip-sync
+                  </span>
                 </h4>
 
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {selectedCharacter.expressions?.map((expr, idx) => (
                     <div
                       key={expr.id || `${expr.name}-${idx}`}
-                      className="p-2 rounded-lg bg-slate-950 border border-slate-800 flex flex-col items-center text-center space-y-1"
+                      className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center gap-2.5"
                     >
-                      <div className="w-12 h-12 rounded bg-slate-900 overflow-hidden flex items-center justify-center">
+                      <div className="w-10 h-10 rounded bg-slate-900 overflow-hidden flex items-center justify-center shrink-0">
                         {expr.image_url ? (
                           <img
                             src={expr.image_url}
                             alt={expr.name}
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-contain"
                           />
                         ) : (
                           <Smile className="w-5 h-5 text-slate-600" />
                         )}
                       </div>
-                      <span className="text-[11px] font-medium text-slate-300 truncate w-full">
-                        {expr.name}
-                      </span>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-medium text-slate-200 capitalize block truncate">
+                          {expr.name}
+                        </span>
+                        <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-2.5 h-2.5" /> Lip-sync klaar
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -368,79 +551,128 @@ export const CharacterVault: React.FC = () => {
               required
               value={newCharName}
               onChange={(e) => setNewCharName(e.target.value)}
-              placeholder="bv. Sam de Schildpad"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              placeholder="bv. Adam, Nora, Boris de Beer"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-sm"
             />
           </div>
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-              Persoonlijkheid & Doel
+              Persoonlijkheid & Rol
             </label>
             <input
               type="text"
               value={newCharPersonality}
               onChange={(e) => setNewCharPersonality(e.target.value)}
-              placeholder="bv. Enthousiast, leert kinderen over fruit en groente"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              placeholder="bv. Vrolijk, leergierig, stelt vaak vragen aan de kijkers"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-sm"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* Stem Provider, Stem & Pitch Kiezer */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-                Stem Voice ID
+                Provider
+              </label>
+              <select
+                value={newCharVoiceProvider}
+                onChange={(e) => setNewCharVoiceProvider(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs font-medium"
+              >
+                <option value="edge_tts">Edge-TTS (Direct)</option>
+                <option value="gemini">Google Cloud</option>
+                <option value="piper">Piper (Lokaal)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                Stem
               </label>
               <select
                 value={newCharVoice}
                 onChange={(e) => setNewCharVoice(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs"
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs font-semibold"
               >
-                <option value="nl_NL-mls-medium">Piper Nederlands (Vrolijk)</option>
-                <option value="af_bella">Kokoro Bella (Zacht & Vriendelijk)</option>
-                <option value="nl-NL-Wavenet-A">Google Wavenet NL (Vrouwelijk)</option>
+                <option value="nl-NL-FennaNeural">Fenna (nl-NL Kind)</option>
+                <option value="nl-NL-MaartenNeural">Maarten (nl-NL Verteller)</option>
+                <option value="nl-BE-DenaNeural">Dena (nl-BE Vlaams)</option>
+                <option value="en-US-AnaNeural">Ana (en-US Kind)</option>
               </select>
             </div>
+
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-                Visuele Stijl
+                Pitch Effect
               </label>
-              <input
-                type="text"
-                value={newCharStyle}
-                onChange={(e) => setNewCharStyle(e.target.value)}
-                placeholder="3D Pixar style"
-                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs"
-              />
+              <select
+                value={newCharVoicePitch}
+                onChange={(e) => setNewCharVoicePitch(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono"
+              >
+                <option value="+15Hz">+15Hz (Kinderkarakter)</option>
+                <option value="+25Hz">+25Hz (Hoog speels)</option>
+                <option value="+0Hz">+0Hz (Natuurlijk)</option>
+                <option value="-10Hz">-10Hz (Diepe stem)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+                Snelheid
+              </label>
+              <select
+                value={newCharVoiceRate}
+                onChange={(e) => setNewCharVoiceRate(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono"
+              >
+                <option value="-10%">-10% (Rustig)</option>
+                <option value="+0%">+0% (Normaal)</option>
+                <option value="+10%">+10% (Snel)</option>
+              </select>
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
-              Uiterlijke Beschrijving (voor beeldgeneratie)
+              Stijl Prompt voor 3D Generatie
             </label>
-            <textarea
-              rows={2}
-              value={newCharDesc}
-              onChange={(e) => setNewCharDesc(e.target.value)}
-              placeholder="Schattige kleine bruine beer met een gele trui en grote ronde ogen..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+            <input
+              type="text"
+              value={newCharStyle}
+              onChange={(e) => setNewCharStyle(e.target.value)}
+              placeholder="3D Pixar style cute friendly animal character, big expressive eyes"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-sm font-mono text-xs"
             />
           </div>
 
-          <div className="flex justify-end gap-3 pt-3">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">
+              Visueel DNA Lock (Vast Uiterlijk)
+            </label>
+            <textarea
+              rows={2}
+              value={newCharVisualDna}
+              onChange={(e) => setNewCharVisualDna(e.target.value)}
+              placeholder="5-year-old toddler, big friendly brown eyes, curly brown hair, wearing blue denim overalls and yellow shirt"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-100 text-xs font-mono placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-800">
             <button
               type="button"
               onClick={() => setIsNewCharModalOpen(false)}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
+              className="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-xs font-semibold"
             >
               Annuleren
             </button>
             <button
               type="submit"
-              className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20"
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/20 active:scale-95"
             >
-              Karakter Opslaan
+              Karakter Aanmaken
             </button>
           </div>
         </form>

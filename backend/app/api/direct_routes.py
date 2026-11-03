@@ -35,6 +35,7 @@ from app.schemas.schemas import (
     EpisodeCreate,
     EpisodeResponse,
     EpisodeUpdate,
+    ExportFlowResponse,
     ExpressionResponse,
 )
 from app.workers.task_manager import task_manager
@@ -49,22 +50,20 @@ router = APIRouter(tags=["Direct Endpoints"])
 # ─────────────────────────────────────────────────────────────
 
 
-def _char_to_res(character: Character) -> CharacterResponse:
-    def _url(path: Optional[str]) -> Optional[str]:
-        if not path:
-            return None
-        return f"/media/characters/{character.id}/{Path(path).name}"
+from app.services.image_service import to_media_url
 
+
+def _char_to_res(character: Character) -> CharacterResponse:
     expressions = [
         ExpressionResponse(
             id=expr.id,
             name=expr.name,
             image_path=expr.image_path,
-            image_url=_url(expr.image_path),
+            image_url=to_media_url(expr.image_path),
             mouth_open_path=expr.mouth_open_path,
-            mouth_open_url=_url(expr.mouth_open_path),
+            mouth_open_url=to_media_url(expr.mouth_open_path),
             mouth_closed_path=expr.mouth_closed_path,
-            mouth_closed_url=_url(expr.mouth_closed_path),
+            mouth_closed_url=to_media_url(expr.mouth_closed_path),
             created_at=expr.created_at,
         )
         for expr in character.expressions
@@ -75,10 +74,10 @@ def _char_to_res(character: Character) -> CharacterResponse:
         sprite_path = Path(character.sprite_base_path)
         if sprite_path.is_dir():
             candidate = sprite_path / "sprite_base.png"
-            if candidate.exists():
-                sprite_url = f"/media/characters/{character.id}/{candidate.name}"
-        elif sprite_path.exists():
-            sprite_url = f"/media/characters/{character.id}/{sprite_path.name}"
+            if candidate.exists() and candidate.stat().st_size > 0:
+                sprite_url = to_media_url(str(candidate))
+        elif sprite_path.exists() and sprite_path.stat().st_size > 0:
+            sprite_url = to_media_url(str(sprite_path))
     if not sprite_url and expressions:
         sprite_url = expressions[0].image_url
 
@@ -96,11 +95,15 @@ def _char_to_res(character: Character) -> CharacterResponse:
         personality=character.personality,
         voice_id=character.voice_id,
         voice_provider=character.voice_provider,
+        voice_pitch=character.voice_pitch or "+15Hz",
+        voice_rate=character.voice_rate or "+0%",
         sprite_base_path=character.sprite_base_path,
         sprite_url=sprite_url,
         style_prompt=character.style_prompt,
+        visual_dna_prompt=character.visual_dna_prompt or "",
         color_palette=character.color_palette,
         reference_images=reference_images,
+        reference_image_urls=[to_media_url(p) for p in reference_images if p],
         expressions=expressions,
         created_at=character.created_at,
         updated_at=character.updated_at,
@@ -171,8 +174,79 @@ async def direct_delete_character(id: str, session: Session = Depends(get_sessio
     return {"detail": "Karakter verwijderd."}
 
 
+@router.post("/api/characters/{id}/upload-reference", response_model=CharacterResponse)
+async def direct_upload_character_reference(
+    id: str,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    """Upload een referentie-afbeelding voor het consistente karakter uiterlijk."""
+    char = session.get(Character, id)
+    if not char:
+        raise HTTPException(status_code=404, detail="Karakter niet gevonden.")
+
+    ext = Path(file.filename or "ref.png").suffix.lower()
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        ext = ".png"
+
+    filename = f"ref_{id}_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4().hex[:4]}{ext}"
+    dest = settings.characters_dir / filename
+    dest.write_bytes(await file.read())
+
+    try:
+        current_refs = json.loads(char.reference_images_json or "[]")
+        if not isinstance(current_refs, list):
+            current_refs = []
+    except Exception:
+        current_refs = []
+
+    if len(current_refs) >= 3:
+        current_refs.pop(0)
+    current_refs.append(str(dest))
+
+    char.reference_images_json = json.dumps(current_refs, ensure_ascii=False)
+    char.updated_at = datetime.now(timezone.utc)
+    session.add(char)
+    session.commit()
+    session.refresh(char)
+    return _char_to_res(char)
+
+
+@router.delete("/api/characters/{id}/reference/{index}", response_model=CharacterResponse)
+async def direct_delete_character_reference(
+    id: str,
+    index: int,
+    session: Session = Depends(get_session),
+):
+    """Verwijder een referentie-afbeelding van een karakter."""
+    char = session.get(Character, id)
+    if not char:
+        raise HTTPException(status_code=404, detail="Karakter niet gevonden.")
+
+    try:
+        current_refs = json.loads(char.reference_images_json or "[]")
+        if not isinstance(current_refs, list):
+            current_refs = []
+    except Exception:
+        current_refs = []
+
+    if 0 <= index < len(current_refs):
+        current_refs.pop(index)
+        char.reference_images_json = json.dumps(current_refs, ensure_ascii=False)
+        char.updated_at = datetime.now(timezone.utc)
+        session.add(char)
+        session.commit()
+        session.refresh(char)
+
+    return _char_to_res(char)
+
+
 @router.post("/api/characters/{id}/generate-sprite")
-async def direct_generate_sprite(id: str, session: Session = Depends(get_session)):
+async def direct_generate_sprite(
+    id: str,
+    emotion: str = "blij",
+    session: Session = Depends(get_session),
+):
     char = session.get(Character, id)
     if not char:
         raise HTTPException(status_code=404, detail="Karakter niet gevonden.")
@@ -188,14 +262,15 @@ async def direct_generate_sprite(id: str, session: Session = Depends(get_session
         out_dir = settings.characters_dir / id
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        task_manager.update_progress(task_id, 0.4, "Sprite renderen en achtergrond uitsnijden...")
+        task_manager.update_progress(task_id, 0.4, f"Sprite ({emotion}) renderen en mond-sprites maken...")
         res = await image_service.generate_character_sprite(
             description=character_description,
+            emotion=emotion,
             style_prompt=character_style,
             output_dir=str(out_dir),
         )
 
-        task_manager.update_progress(task_id, 0.9, "Sprite opslaan...")
+        task_manager.update_progress(task_id, 0.9, "Sprite en expressies opslaan in database...")
         engine = get_engine()
         with Session(engine) as db:
             c = db.get(Character, id)
@@ -203,13 +278,33 @@ async def direct_generate_sprite(id: str, session: Session = Depends(get_session
                 c.sprite_base_path = res.get("sprite_path")
                 c.updated_at = datetime.now(timezone.utc)
                 db.add(c)
+
+                # Zoek of maak expressie aan
+                expr = db.exec(
+                    select(CharacterExpression)
+                    .where(CharacterExpression.character_id == id)
+                    .where(CharacterExpression.name == emotion)
+                ).first()
+                if not expr:
+                    expr = CharacterExpression(
+                        character_id=id,
+                        name=emotion,
+                        image_path=res.get("sprite_path", ""),
+                        mouth_open_path=res.get("mouth_open_path"),
+                        mouth_closed_path=res.get("mouth_closed_path"),
+                    )
+                else:
+                    expr.image_path = res.get("sprite_path", "")
+                    expr.mouth_open_path = res.get("mouth_open_path")
+                    expr.mouth_closed_path = res.get("mouth_closed_path")
+                db.add(expr)
                 db.commit()
 
         task_manager.update_progress(task_id, 1.0, "Sprite klaar!")
         return res
 
     task_manager.start_task(task_id, _gen())
-    return {"task_id": task_id, "detail": "Sprite generatie gestart."}
+    return {"task_id": task_id, "detail": f"Sprite generatie voor '{emotion}' gestart."}
 
 
 @router.post(
@@ -285,14 +380,7 @@ def _ep_to_res(episode: Episode, session: Session) -> EpisodeResponse:
         .where(RenderJob.status == "complete")
         .order_by(RenderJob.completed_at.desc())  # type: ignore[attr-defined]
     ).first()
-    render_url = None
-    if render_job and render_job.output_path:
-        output = render_job.output_path
-        render_url = (
-            output
-            if output.startswith("/media/")
-            else f"/media/renders/{Path(output).name}"
-        )
+    render_url = to_media_url(render_job.output_path) if (render_job and render_job.output_path) else None
 
     publish_job = session.exec(
         select(PublishJob)
@@ -327,7 +415,9 @@ def _ep_to_res(episode: Episode, session: Session) -> EpisodeResponse:
         seo_description=episode.seo_description,
         seo_tags=episode.seo_tags,
         thumbnail_prompt=episode.thumbnail_prompt,
-        thumbnail_path=episode.thumbnail_path,
+        thumbnail_path=to_media_url(episode.thumbnail_path),
+        target_audience=episode.target_audience or "kids",
+        made_for_kids=episode.made_for_kids,
         bg_music_path=episode.bg_music_path,
         status=episode.status,
         scene_count=len(scenes),
@@ -402,6 +492,22 @@ async def direct_delete_episode(id: str, session: Session = Depends(get_session)
     return {"detail": "Aflevering verwijderd."}
 
 
+@router.get("/api/episodes/{id}/export-flow", response_model=ExportFlowResponse)
+async def direct_export_episode_flow(id: str):
+    """Exporteert alle Start-Frames en Motion Prompts als een Google Flow ZIP bestand."""
+    from app.services.video_animation_service import video_animation_service
+    try:
+        res = await video_animation_service.export_episode_flow(id)
+        return ExportFlowResponse(
+            zip_url=res["zip_url"],
+            zip_path=res["zip_path"],
+            scene_count=res["scene_count"],
+            message=res["message"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────────────────────
 # Instellingen & Services Status (Direct voor frontend store)
 # ─────────────────────────────────────────────────────────────
@@ -414,6 +520,10 @@ async def direct_get_settings():
     return {
         "gemini_api_key": settings_manager.get_masked("gemini_api_key") or "",
         "gemini_api_key_set": bool(all_s.get("gemini_api_key")),
+        "gemini_model": all_s.get("gemini_model", "gemini-2.5-flash"),
+        "default_image_provider": all_s.get("default_image_provider", "gemini"),
+        "wan_api_url": all_s.get("wan_api_url", settings.wan_api_url),
+        "wan_api_key": settings_manager.get_masked("wan_api_key") or "",
         "ollama_url": all_s.get("ollama_base_url", settings.ollama_base_url),
         "sd_webui_url": all_s.get("sd_webui_base_url", settings.sd_webui_base_url),
         "piper_path": all_s.get("piper_model_path", settings.piper_model_path),
@@ -430,6 +540,10 @@ async def direct_save_settings(data: Dict[str, Any]):
     """Sla gewijzigde instellingen op; gemaskeerde waarden worden genegeerd."""
     key_mapping = {
         "gemini_api_key": "gemini_api_key",
+        "gemini_model": "gemini_model",
+        "default_image_provider": "default_image_provider",
+        "wan_api_url": "wan_api_url",
+        "wan_api_key": "wan_api_key",
         "ollama_url": "ollama_base_url",
         "sd_webui_url": "sd_webui_base_url",
         "piper_path": "piper_model_path",

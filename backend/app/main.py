@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.audio import router as audio_router
+from app.api.audio import router as audio_router, top_audio_router
 from app.api.characters import router as characters_router
 from app.api.direct_routes import router as direct_router
 from app.api.episodes import router as episodes_router
@@ -44,6 +44,9 @@ async def lifespan(app: FastAPI):
     settings.audio_dir.mkdir(parents=True, exist_ok=True)
     settings.images_dir.mkdir(parents=True, exist_ok=True)
     settings.renders_dir.mkdir(parents=True, exist_ok=True)
+    settings.sprites_dir.mkdir(parents=True, exist_ok=True)
+    settings.clips_dir.mkdir(parents=True, exist_ok=True)
+    settings.exports_dir.mkdir(parents=True, exist_ok=True)
     settings.temp_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialiseer SQLite tabellen
@@ -74,7 +77,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serveer persistente media bestanden (afbeeldingen, audio, renders)
+# Serveer persistente media bestanden (afbeeldingen, audio, renders, sprites)
+app.mount("/api/media", StaticFiles(directory=str(settings.media_dir)), name="api_media")
 app.mount("/media", StaticFiles(directory=str(settings.media_dir)), name="media")
 
 # Registreer routers
@@ -84,6 +88,7 @@ app.include_router(characters_router)
 app.include_router(episodes_router)
 app.include_router(scenes_router)
 app.include_router(audio_router)
+app.include_router(top_audio_router)
 app.include_router(render_router)
 app.include_router(publish_router)
 app.include_router(events_router)

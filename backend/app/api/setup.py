@@ -10,10 +10,13 @@ from app.core.config import settings
 from app.core.database import get_session
 from app.core.settings_manager import settings_manager
 from app.schemas.schemas import (
+    GeminiTestRequest,
+    GeminiTestResponse,
     ServiceStatus,
     SettingResponse,
     SettingUpdate,
     SetupStatusResponse,
+    YouTubeChannelResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,24 +43,24 @@ def _mask_value(key: str, value: str) -> Optional[str]:
 
 async def _check_gemini() -> ServiceStatus:
     """Controleer Gemini API configuratie en verbinding."""
-    api_key = settings_manager.get("gemini_api_key", settings.gemini_api_key)
+    from app.services.gemini_service import gemini_service
+
+    api_key = gemini_service.get_api_key()
     status = ServiceStatus(
         name="Gemini",
         instructions_nl=(
             "Stel je Gemini API-sleutel in via het Setup Centrum. "
-            "Ga naar https://aistudio.google.com/apikey om een sleutel aan te maken."
+            "Ga naar https://aistudio.google.com/apikey om een gratis sleutel aan te maken."
         ),
     )
     if not api_key:
         return status
     status.configured = True
     try:
-        from app.services.gemini_service import GeminiService
-
-        service = GeminiService(api_key=api_key)
-        status.connected = await service.test_connection()
+        res = await gemini_service.test_api_key(api_key)
+        status.connected = res.get("valid", False)
         if not status.connected:
-            status.error = "Gemini API-sleutel is ongeldig of de API is niet bereikbaar."
+            status.error = res.get("error") or "Gemini API-sleutel is ongeldig of quota overschreden."
     except Exception as exc:
         status.error = str(exc)
     return status
@@ -95,9 +98,8 @@ async def _check_sd_webui() -> ServiceStatus:
     status = ServiceStatus(
         name="SD WebUI",
         instructions_nl=(
-            "Installeer Stable Diffusion WebUI Forge en start met --api flag. "
-            "Standaard draait het op http://localhost:7860. "
-            "Zorg dat de API modus is ingeschakeld."
+            "Optioneel: installeer Stable Diffusion WebUI Forge lokaal en start met --api vlag op poort 7860. "
+            "Niet vereist als je Google Gemini / Imagen of de ingebouwde cloud generator gebruikt."
         ),
     )
     if not base_url:
@@ -106,11 +108,16 @@ async def _check_sd_webui() -> ServiceStatus:
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{base_url}/sdapi/v1/options")
             status.connected = resp.status_code == 200
             if not status.connected:
                 status.error = f"HTTP status {resp.status_code}"
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        status.error = (
+            "SD WebUI Forge draait momenteel niet op poort 7860. "
+            "Schakel over naar 'Google Gemini / Imagen' of 'Ingebouwde Cloud Generator' als je Forge niet lokaal gebruikt."
+        )
     except Exception as exc:
         status.error = str(exc)
     return status
@@ -169,9 +176,13 @@ async def _check_kokoro() -> ServiceStatus:
 
 
 async def _check_youtube() -> ServiceStatus:
-    """Controleer YouTube API configuratie."""
+    """Controleer YouTube API configuratie en actieve OAuth koppeling."""
+    from app.services.youtube_service import youtube_service
+
     client_id = settings_manager.get("youtube_client_id", settings.youtube_client_id)
     client_secret = settings_manager.get("youtube_client_secret", settings.youtube_client_secret)
+    token = settings_manager.get("youtube_oauth_token")
+
     status = ServiceStatus(
         name="YouTube",
         instructions_nl=(
@@ -182,7 +193,20 @@ async def _check_youtube() -> ServiceStatus:
     if not client_id or not client_secret:
         return status
     status.configured = True
-    status.connected = True  # OAuth vereist user-interactie, dus we checken alleen de config
+
+    if token:
+        try:
+            channel_info = youtube_service.get_channel_info()
+            if channel_info:
+                status.connected = True
+                status.instructions_nl = f"Gekoppeld met kanaal: {channel_info.get('title')}"
+            else:
+                status.connected = True
+        except Exception:
+            status.connected = True
+    else:
+        status.connected = False
+        status.instructions_nl = "OAuth client geconfigureerd. Koppel je account via de login knop."
     return status
 
 
@@ -209,6 +233,49 @@ async def get_setup_status():
 
     all_configured = all(s.configured for s in services)
     return SetupStatusResponse(services=services, all_configured=all_configured)
+
+
+@router.post("/test-gemini", response_model=GeminiTestResponse)
+async def test_gemini_api(data: Optional[GeminiTestRequest] = None):
+    """Valideer een Gemini API-sleutel en haal actuele beschikbare modellen op."""
+    from app.services.gemini_service import gemini_service
+
+    api_key = data.api_key.strip() if (data and data.api_key) else None
+    res = await gemini_service.test_api_key(api_key=api_key)
+
+    # Als de test slaagt en er werd een sleutel meegegeven, sla hem direct op
+    if res.get("valid") and api_key:
+        settings_manager.set("gemini_api_key", api_key, "Google Gemini API sleutel")
+
+    return GeminiTestResponse(
+        valid=res.get("valid", False),
+        status_code=res.get("status_code", 400),
+        models=res.get("models", []),
+        text_models=res.get("text_models", []),
+        image_models=res.get("image_models", []),
+        message=res.get("message", ""),
+        error=res.get("error"),
+    )
+
+
+@router.get("/youtube-channel", response_model=YouTubeChannelResponse)
+async def get_youtube_channel():
+    """Haal profiel en statistieken op van het actieve gekoppelde YouTube account."""
+    from app.services.youtube_service import youtube_service
+
+    info = youtube_service.get_channel_info()
+    if not info:
+        return YouTubeChannelResponse(connected=False)
+    return YouTubeChannelResponse(**info)
+
+
+@router.post("/youtube-disconnect")
+async def disconnect_youtube():
+    """Ontkoppel het gekoppelde YouTube account."""
+    from app.services.youtube_service import youtube_service
+
+    youtube_service.disconnect()
+    return {"detail": "YouTube account succesvol ontkoppeld."}
 
 
 @router.post("/test/{service_name}", response_model=ServiceStatus)

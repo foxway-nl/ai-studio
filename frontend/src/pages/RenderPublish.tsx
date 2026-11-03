@@ -6,7 +6,6 @@ import {
   UploadCloud,
   CheckCircle2,
   ExternalLink,
-  ShieldCheck,
   ArrowLeft,
   Tags,
   Music,
@@ -14,11 +13,13 @@ import {
   Save,
   Sparkles,
   AlertTriangle,
+  Globe,
+  Smile,
 } from 'lucide-react';
 import { useStore } from '../store/useStore';
 import { TaskProgress } from '../components/TaskProgress';
 import { StatusBadge } from '../components/StatusBadge';
-import { getYouTubeAuthUrl } from '../api/client';
+import { getYouTubeAuthUrl, getYouTubeChannel, disconnectYouTube, YouTubeChannelResponse } from '../api/client';
 
 export const RenderPublish: React.FC = () => {
   const { id: episodeId } = useParams<{ id: string }>();
@@ -42,6 +43,7 @@ export const RenderPublish: React.FC = () => {
 
   const [privacyStatus, setPrivacyStatus] = useState<'public' | 'unlisted' | 'private'>('private');
   const [madeForKids, setMadeForKids] = useState(true);
+  const [channelInfo, setChannelInfo] = useState<YouTubeChannelResponse | null>(null);
   const [activePublishTaskId, setActivePublishTaskId] = useState<string | null>(null);
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null);
 
@@ -60,6 +62,18 @@ export const RenderPublish: React.FC = () => {
   }, [episodeId, fetchEpisode, fetchScenes]);
 
   useEffect(() => {
+    const loadChannel = async () => {
+      try {
+        const info = await getYouTubeChannel();
+        setChannelInfo(info);
+      } catch {
+        // niet gekoppeld
+      }
+    };
+    loadChannel();
+  }, []);
+
+  useEffect(() => {
     if (currentEpisode?.youtube_url) {
       setPublishedUrl(currentEpisode.youtube_url);
     }
@@ -71,6 +85,9 @@ export const RenderPublish: React.FC = () => {
       setSeoDescription(currentEpisode.seo_description || '');
       setSeoTags(currentEpisode.seo_tags || '');
       setBgMusicPath(currentEpisode.bg_music_path || '');
+      if (typeof currentEpisode.made_for_kids === 'boolean') {
+        setMadeForKids(currentEpisode.made_for_kids);
+      }
     }
   }, [currentEpisode]);
 
@@ -94,6 +111,8 @@ export const RenderPublish: React.FC = () => {
       seo_description: seoDescription,
       seo_tags: seoTags,
       bg_music_path: bgMusicPath,
+      made_for_kids: madeForKids,
+      target_audience: madeForKids ? 'kids' : 'general',
     });
   };
 
@@ -109,8 +128,27 @@ export const RenderPublish: React.FC = () => {
 
   const thumbnailUrl = (() => {
     if (!currentEpisode?.thumbnail_path) return null;
-    const filename = currentEpisode.thumbnail_path.split(/[\\/]/).pop();
-    return filename ? `/media/images/${filename}` : null;
+    const path = currentEpisode.thumbnail_path;
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/api/media/')) {
+      return path;
+    }
+    if (path.startsWith('/media/')) {
+      return `/api${path}`;
+    }
+    const filename = path.split(/[\\/]/).pop();
+    return filename ? `/api/media/images/${filename}` : null;
+  })();
+
+  const videoRenderUrl = (() => {
+    if (!currentEpisode?.render_url) return null;
+    const url = currentEpisode.render_url;
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/api/media/')) {
+      return url;
+    }
+    if (url.startsWith('/media/')) {
+      return `/api${url}`;
+    }
+    return url;
   })();
 
   const handleStartRender = async () => {
@@ -181,12 +219,12 @@ export const RenderPublish: React.FC = () => {
             </div>
 
             {/* Video Player Preview if Rendered */}
-            {currentEpisode?.render_url && (
+            {videoRenderUrl && (
               <div className="w-full rounded-xl overflow-hidden bg-black border border-slate-800 aspect-video flex items-center justify-center">
                 <video
                   controls
                   className="w-full h-full object-contain"
-                  src={currentEpisode.render_url}
+                  src={videoRenderUrl}
                 >
                   Je browser ondersteunt geen video tags.
                 </video>
@@ -254,7 +292,7 @@ export const RenderPublish: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: YouTube Kids Publication */}
+        {/* Right Column: YouTube Publicatie & Doelgroep */}
         <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-6 flex flex-col justify-between">
           <div className="space-y-4">
             <div className="flex items-center gap-3 pb-3 border-b border-slate-800">
@@ -262,9 +300,9 @@ export const RenderPublish: React.FC = () => {
                 <UploadCloud className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="font-bold text-base text-slate-100">2. YouTube Kids Publiceren</h3>
+                <h3 className="font-bold text-base text-slate-100">2. YouTube Publiceren</h3>
                 <p className="text-xs text-slate-400">
-                  Resumable upload met strikte COPPA 'Made for Kids' certificering.
+                  Resumable upload met flexibele COPPA- en doelgroep-instellingen.
                 </p>
               </div>
             </div>
@@ -286,39 +324,143 @@ export const RenderPublish: React.FC = () => {
                 </select>
               </div>
 
-              {/* Made for Kids COPPA Checkbox */}
-              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3">
-                <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                <div className="text-xs space-y-1">
-                  <label className="font-bold text-amber-200 flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={madeForKids}
-                      onChange={(e) => setMadeForKids(e.target.checked)}
-                      className="rounded accent-amber-500 cursor-pointer"
-                    />
-                    <span>Made for Kids (Verplicht voor kindercontent)</span>
-                  </label>
-                  <p className="text-amber-300/80 leading-relaxed">
-                    Stelt <code className="font-mono text-amber-200">selfDeclaredMadeForKids=true</code> in via de YouTube API conform COPPA-wetgeving.
-                  </p>
+              {/* Doelgroep Selector: Mode A vs Mode B */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-300">
+                  Doelgroep & YouTube Algoritme
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMadeForKids(true);
+                      if (episodeId) {
+                        await updateEpisode(episodeId, { made_for_kids: true, target_audience: 'kids' });
+                      }
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      madeForKids
+                        ? 'bg-amber-500/15 border-amber-500/60 ring-1 ring-amber-500/40'
+                        : 'bg-slate-800/60 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Smile className="w-4 h-4 text-amber-400" />
+                      <span className={`text-xs font-bold ${madeForKids ? 'text-amber-200' : 'text-slate-300'}`}>
+                        Mode A: Kids / COPPA
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Kinderen tot 7 jr. YouTube Kids app, veilige advertenties, geen reacties.
+                    </p>
+                    <div className="mt-2 text-[10px] font-mono text-amber-300/80">
+                      madeForKids: true
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMadeForKids(false);
+                      if (episodeId) {
+                        await updateEpisode(episodeId, { made_for_kids: false, target_audience: 'general' });
+                      }
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      !madeForKids
+                        ? 'bg-indigo-500/15 border-indigo-500/60 ring-1 ring-indigo-500/40'
+                        : 'bg-slate-800/60 border-slate-700 hover:border-slate-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <Globe className="w-4 h-4 text-indigo-400" />
+                      <span className={`text-xs font-bold ${!madeForKids ? 'text-indigo-200' : 'text-slate-300'}`}>
+                        Mode B: Standaard
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      Algemeen publiek & ouders. Reacties aan, standaard YouTube aanbevelingen.
+                    </p>
+                    <div className="mt-2 text-[10px] font-mono text-indigo-300/80">
+                      madeForKids: false
+                    </div>
+                  </button>
                 </div>
               </div>
 
-              {/* YouTube OAuth Connect Button */}
-              <button
-                type="button"
-                onClick={handleConnectYouTube}
-                className="w-full flex items-center justify-between p-3 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-xs text-slate-300 transition-colors"
-              >
-                <span className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-                  <span>YouTube OAuth Kanaal Koppelingsstatus</span>
-                </span>
-                <span className="text-indigo-400 font-semibold flex items-center gap-1">
-                  Opnieuw Koppelen <ExternalLink className="w-3 h-3" />
-                </span>
-              </button>
+              {/* YouTube OAuth Kanaal Card */}
+              {channelInfo?.connected ? (
+                <div className="p-3.5 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {channelInfo.avatar_url ? (
+                      <img
+                        src={channelInfo.avatar_url}
+                        alt={channelInfo.title || 'YouTube Channel'}
+                        className="w-10 h-10 rounded-full border border-slate-600 shrink-0 object-cover"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-rose-600/20 text-rose-400 flex items-center justify-center font-bold text-sm shrink-0">
+                        YT
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-100 truncate">
+                          {channelInfo.title || 'Gekoppeld Kanaal'}
+                        </span>
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px] font-medium border border-emerald-500/20">
+                          <CheckCircle2 className="w-2.5 h-2.5" /> Gekoppeld
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 flex items-center gap-2">
+                        {channelInfo.subscriber_count && (
+                          <span>{Number(channelInfo.subscriber_count).toLocaleString('nl-NL')} abonnees</span>
+                        )}
+                        {channelInfo.custom_url && (
+                          <span className="font-mono text-slate-500">{channelInfo.custom_url}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleConnectYouTube}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-medium transition-colors"
+                      title="Wissel van Google / YouTube account"
+                    >
+                      Wissel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (confirm('Weet je zeker dat je het YouTube kanaal wilt ontkoppelen?')) {
+                          await disconnectYouTube();
+                          setChannelInfo({ connected: false });
+                        }
+                      }}
+                      className="px-2 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-medium transition-colors"
+                      title="Ontkoppel YouTube"
+                    >
+                      Ontkoppel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleConnectYouTube}
+                  className="w-full flex items-center justify-between p-3.5 rounded-xl bg-slate-800 hover:bg-slate-750 border border-slate-700 text-xs text-slate-300 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                    <span>Geen YouTube Kanaal Gekoppeld</span>
+                  </span>
+                  <span className="text-rose-400 font-semibold flex items-center gap-1">
+                    Koppel YouTube Kanaal <ExternalLink className="w-3 h-3" />
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Published Link Result */}
@@ -358,7 +500,7 @@ export const RenderPublish: React.FC = () => {
               className="w-full flex items-center justify-center gap-2 py-3 px-5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-lg shadow-rose-600/25 active:scale-95 transition-all disabled:opacity-50"
             >
               <UploadCloud className="w-4 h-4" />
-              <span>{isRendered ? 'Uploaden naar YouTube Kids' : 'Render eerst de video'}</span>
+              <span>{isRendered ? (madeForKids ? 'Uploaden naar YouTube Kids' : 'Uploaden naar YouTube') : 'Render eerst de video'}</span>
             </button>
           </div>
         </div>

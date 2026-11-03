@@ -29,11 +29,15 @@ export interface Character {
   personality: string;
   voice_id: string;
   voice_provider?: string;
+  voice_pitch?: string;
+  voice_rate?: string;
   style_prompt: string;
+  visual_dna_prompt?: string;
   color_palette?: string;
   sprite_base_path?: string | null;
   sprite_url: string | null;
   reference_images?: string[];
+  reference_image_urls?: string[];
   expressions: CharacterExpression[];
   created_at: string;
   updated_at: string;
@@ -55,7 +59,11 @@ export interface CharacterCreate {
   description: string;
   personality: string;
   voice_id: string;
+  voice_provider?: string;
+  voice_pitch?: string;
+  voice_rate?: string;
   style_prompt: string;
+  visual_dna_prompt?: string;
 }
 
 export interface CharacterUpdate {
@@ -63,7 +71,11 @@ export interface CharacterUpdate {
   description?: string;
   personality?: string;
   voice_id?: string;
+  voice_provider?: string;
+  voice_pitch?: string;
+  voice_rate?: string;
   style_prompt?: string;
+  visual_dna_prompt?: string;
 }
 
 export interface Episode {
@@ -77,6 +89,8 @@ export interface Episode {
   seo_tags: string;
   thumbnail_prompt: string;
   thumbnail_path: string | null;
+  target_audience?: 'kids' | 'general';
+  made_for_kids?: boolean;
   bg_music_path: string;
   target_duration: number;
   target_duration_seconds: number;
@@ -106,6 +120,8 @@ export interface EpisodeCreate {
   project_id: string;
   title: string;
   description: string;
+  target_audience?: 'kids' | 'general';
+  made_for_kids?: boolean;
 }
 
 export interface EpisodeUpdate {
@@ -116,9 +132,18 @@ export interface EpisodeUpdate {
   seo_tags?: string;
   thumbnail_prompt?: string;
   bg_music_path?: string;
+  target_audience?: 'kids' | 'general';
+  made_for_kids?: boolean;
   target_duration?: number;
   target_duration_seconds?: number;
   status?: EpisodeStatus;
+}
+
+export interface SceneCharacterItem {
+  character_id: string;
+  name: string;
+  position: 'left' | 'center' | 'right';
+  emotion: string;
 }
 
 export interface SceneHistoryItem {
@@ -143,13 +168,19 @@ export interface Scene {
   title: string;
   chapter_type: string;
   speaker: string;
+  active_speaker?: string;
   narration_text: string;
   narration: string;
   phonetic_text: string;
   visual_prompt: string;
   background_prompt: string;
   image_prompt: string;
+  motion_prompt?: string;
+  video_clip_path?: string | null;
+  video_clip_url?: string | null;
+  animation_engine?: string;
   character_ids: string[];
+  characters_in_scene?: SceneCharacterItem[];
   character_positions: string;
   animation_type: AnimationType;
   transition_type: TransitionType;
@@ -202,12 +233,17 @@ export interface SceneCreate {
   title?: string;
   chapter_type?: string;
   speaker?: string;
+  active_speaker?: string;
   narration: string;
   phonetic_text?: string;
   visual_prompt: string;
   background_prompt?: string;
   image_prompt?: string;
+  motion_prompt?: string;
+  video_clip_path?: string | null;
+  animation_engine?: string;
   character_ids?: string[];
+  characters_in_scene?: SceneCharacterItem[];
   animation_type?: AnimationType;
   transition_type?: TransitionType;
   duration?: number;
@@ -220,12 +256,17 @@ export interface SceneUpdate {
   title?: string;
   chapter_type?: string;
   speaker?: string;
+  active_speaker?: string;
   narration?: string;
   phonetic_text?: string;
   visual_prompt?: string;
   background_prompt?: string;
   image_prompt?: string;
+  motion_prompt?: string;
+  video_clip_path?: string | null;
+  animation_engine?: string;
   character_ids?: string[];
+  characters_in_scene?: SceneCharacterItem[];
   animation_type?: AnimationType;
   transition_type?: TransitionType;
   duration?: number;
@@ -322,12 +363,62 @@ export interface ServiceStatus {
 
 export interface Settings {
   gemini_api_key: string;
+  gemini_model?: string;
+  default_image_provider?: string;
+  wan_api_url?: string;
+  wan_api_key?: string;
   ollama_url: string;
   sd_webui_url: string;
   piper_path: string;
   kokoro_url: string;
   youtube_client_id: string;
   youtube_client_secret: string;
+}
+
+export interface GeminiTestResponse {
+  valid: boolean;
+  status_code: number;
+  models: string[];
+  text_models: string[];
+  image_models: string[];
+  message: string;
+  error?: string | null;
+}
+
+export interface VoiceItem {
+  id: string;
+  name: string;
+  gender: string;
+  language: string;
+  recommended: boolean;
+}
+
+export type VoicesMap = Record<string, VoiceItem[]>;
+
+export interface VoiceTestRequest {
+  voice_id: string;
+  voice_provider: string;
+  text: string;
+  pitch?: string;
+  rate?: string;
+}
+
+export interface VoiceTestResponse {
+  audio_url: string;
+  duration_seconds: number;
+  voice_id: string;
+  message: string;
+}
+
+export interface YouTubeChannelResponse {
+  connected: boolean;
+  id?: string | null;
+  title?: string | null;
+  description?: string | null;
+  custom_url?: string | null;
+  avatar_url?: string | null;
+  subscriber_count?: string | null;
+  video_count?: string | null;
 }
 
 export interface TaskProgress {
@@ -346,6 +437,27 @@ export interface TestConnectionResponse {
 
 export interface YouTubeAuthUrl {
   auth_url: string;
+}
+
+export interface AnimateSceneRequest {
+  animation_engine?: string;
+  motion_prompt?: string;
+}
+
+export interface AnimateSceneResponse {
+  scene_id: string;
+  video_clip_url: string;
+  video_clip_path: string;
+  duration: number;
+  animation_engine: string;
+  message: string;
+}
+
+export interface ExportFlowResponse {
+  zip_url: string;
+  zip_path: string;
+  scene_count: number;
+  message: string;
 }
 
 // ─── API Client ──────────────────────────────────────────────────────────────
@@ -411,10 +523,13 @@ export async function deleteCharacter(id: string): Promise<void> {
 }
 
 export async function generateSprite(
-  characterId: string
+  characterId: string,
+  emotion = 'blij'
 ): Promise<{ task_id: string; detail?: string }> {
   const res = await client.post<{ task_id: string; detail?: string }>(
-    `/characters/${characterId}/generate-sprite`
+    `/characters/${characterId}/generate-sprite`,
+    undefined,
+    { params: { emotion } }
   );
   return res.data;
 }
@@ -609,6 +724,84 @@ export async function testConnection(service: string): Promise<TestConnectionRes
 
 export async function getServicesStatus(): Promise<ServiceStatus[]> {
   const res = await client.get<ServiceStatus[]>('/settings/status');
+  return res.data;
+}
+
+export async function testGeminiApiKey(apiKey?: string): Promise<GeminiTestResponse> {
+  const res = await client.post<GeminiTestResponse>('/setup/test-gemini', {
+    api_key: apiKey,
+  });
+  return res.data;
+}
+
+export async function getAvailableVoices(): Promise<VoicesMap> {
+  const res = await client.get<VoicesMap>('/audio/voices');
+  return res.data;
+}
+
+export async function testVoice(data: VoiceTestRequest): Promise<VoiceTestResponse> {
+  const res = await client.post<VoiceTestResponse>('/audio/test-voice', data);
+  return res.data;
+}
+
+export async function getYouTubeChannel(): Promise<YouTubeChannelResponse> {
+  const res = await client.get<YouTubeChannelResponse>('/setup/youtube-channel');
+  return res.data;
+}
+
+export async function disconnectYouTube(): Promise<{ detail: string }> {
+  const res = await client.post<{ detail: string }>('/setup/youtube-disconnect');
+  return res.data;
+}
+
+// ─── Image-to-Video Animatie & Google Flow ───────────────────────────────────
+
+export async function animateScene(
+  sceneId: string,
+  engine: string = 'veo',
+  motionPrompt?: string
+): Promise<AnimateSceneResponse> {
+  const res = await client.post<AnimateSceneResponse>(`/scenes/${sceneId}/animate`, {
+    animation_engine: engine,
+    motion_prompt: motionPrompt,
+  });
+  return res.data;
+}
+
+export async function uploadSceneClip(sceneId: string, file: File): Promise<AnimateSceneResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await client.post<AnimateSceneResponse>(`/scenes/${sceneId}/upload-clip`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data;
+}
+
+export async function generateSceneMotionPrompt(
+  sceneId: string
+): Promise<{ scene_id: string; motion_prompt: string }> {
+  const res = await client.post<{ scene_id: string; motion_prompt: string }>(
+    `/scenes/${sceneId}/generate-motion-prompt`
+  );
+  return res.data;
+}
+
+export async function exportGoogleFlow(episodeId: string): Promise<ExportFlowResponse> {
+  const res = await client.get<ExportFlowResponse>(`/episodes/${episodeId}/export-flow`);
+  return res.data;
+}
+
+export async function uploadCharacterReference(characterId: string, file: File): Promise<Character> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await client.post<Character>(`/characters/${characterId}/upload-reference`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return res.data;
+}
+
+export async function deleteCharacterReference(characterId: string, index: number): Promise<Character> {
+  const res = await client.delete<Character>(`/characters/${characterId}/reference/${index}`);
   return res.data;
 }
 

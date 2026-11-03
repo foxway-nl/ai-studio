@@ -1,9 +1,13 @@
-"""Settings Manager – lees/schrijf key-value instellingen naar de database.
+"""Settings Manager – lees/schrijf key-value instellingen naar de database en /data/config.json.
 
 Wordt gebruikt door het Setup Centrum om API-sleutels en service-URL's op te slaan
 en op te halen zonder herstart van de applicatie.
 """
 
+import json
+import logging
+import os
+from pathlib import Path
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -11,57 +15,133 @@ from sqlmodel import Session, select
 from app.models.models import AppSetting
 from .database import get_engine
 
+logger = logging.getLogger(__name__)
+
+
+def _get_config_json_path() -> Path:
+    data_dir = os.getenv("DATA_DIR", "/data")
+    p = Path(data_dir)
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "config.json"
+
+
+def _read_config_json() -> dict[str, str]:
+    try:
+        path = _get_config_json_path()
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.debug("Kon config.json niet lezen: %s", e)
+    return {}
+
+
+def _write_config_json(data: dict[str, str]) -> None:
+    try:
+        path = _get_config_json_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Kon config.json niet schrijven: %s", e)
+
 
 class SettingsManager:
-    """Beheer applicatie-instellingen in de database."""
+    """Beheer applicatie-instellingen in SQLite en /data/config.json."""
 
     @staticmethod
     def get(key: str, default: Optional[str] = None) -> Optional[str]:
-        """Haal een instelling op uit de database."""
-        engine = get_engine()
-        with Session(engine) as session:
-            stmt = select(AppSetting).where(AppSetting.key == key)
-            setting = session.exec(stmt).first()
-            if setting is not None:
-                return setting.value
-            return default
+        """Haal een instelling op uit de database of config.json."""
+        k = key.strip()
+        try:
+            engine = get_engine()
+            with Session(engine) as session:
+                stmt = select(AppSetting).where(AppSetting.key == k)
+                setting = session.exec(stmt).first()
+                if setting is not None and setting.value is not None:
+                    val = str(setting.value).strip()
+                    if val:
+                        return val
+        except Exception as e:
+            logger.debug("Database get error voor %s: %s", k, e)
+
+        # Fallback naar config.json
+        cfg = _read_config_json()
+        if k in cfg and cfg[k] is not None:
+            val = str(cfg[k]).strip()
+            if val:
+                return val
+
+        if default is not None:
+            return str(default).strip()
+        return None
 
     @staticmethod
     def set(key: str, value: str, description: str = "") -> None:
-        """Sla een instelling op in de database (insert of update)."""
-        engine = get_engine()
-        with Session(engine) as session:
-            stmt = select(AppSetting).where(AppSetting.key == key)
-            setting = session.exec(stmt).first()
-            if setting is not None:
-                setting.value = value
-                if description:
-                    setting.description = description
-            else:
-                setting = AppSetting(key=key, value=value, description=description)
-                session.add(setting)
-            session.commit()
+        """Sla een instelling op in de database en sync naar config.json."""
+        k = key.strip()
+        v = str(value).strip() if value is not None else ""
+
+        # Sla op in SQLite
+        try:
+            engine = get_engine()
+            with Session(engine) as session:
+                stmt = select(AppSetting).where(AppSetting.key == k)
+                setting = session.exec(stmt).first()
+                if setting is not None:
+                    setting.value = v
+                    if description:
+                        setting.description = description
+                else:
+                    setting = AppSetting(key=k, value=v, description=description)
+                    session.add(setting)
+                session.commit()
+        except Exception as e:
+            logger.warning("Fout bij opslaan setting %s in database: %s", k, e)
+
+        # Sync naar config.json
+        cfg = _read_config_json()
+        cfg[k] = v
+        _write_config_json(cfg)
 
     @staticmethod
     def get_all() -> dict[str, str]:
         """Haal alle instellingen op als dictionary."""
-        engine = get_engine()
-        with Session(engine) as session:
-            settings = session.exec(select(AppSetting)).all()
-            return {s.key: s.value for s in settings}
+        results = _read_config_json()
+        try:
+            engine = get_engine()
+            with Session(engine) as session:
+                settings_list = session.exec(select(AppSetting)).all()
+                for s in settings_list:
+                    if s.key and s.value is not None:
+                        results[s.key.strip()] = str(s.value).strip()
+        except Exception as e:
+            logger.debug("Fout bij ophalen alle settings uit DB: %s", e)
+        return results
 
     @staticmethod
     def delete(key: str) -> bool:
-        """Verwijder een instelling uit de database."""
-        engine = get_engine()
-        with Session(engine) as session:
-            stmt = select(AppSetting).where(AppSetting.key == key)
-            setting = session.exec(stmt).first()
-            if setting is not None:
-                session.delete(setting)
-                session.commit()
-                return True
-            return False
+        """Verwijder een instelling uit de database en config.json."""
+        k = key.strip()
+        deleted = False
+        try:
+            engine = get_engine()
+            with Session(engine) as session:
+                stmt = select(AppSetting).where(AppSetting.key == k)
+                setting = session.exec(stmt).first()
+                if setting is not None:
+                    session.delete(setting)
+                    session.commit()
+                    deleted = True
+        except Exception:
+            pass
+
+        cfg = _read_config_json()
+        if k in cfg:
+            del cfg[k]
+            _write_config_json(cfg)
+            deleted = True
+
+        return deleted
 
     @staticmethod
     def get_masked(key: str) -> Optional[str]:
@@ -75,4 +155,3 @@ class SettingsManager:
 
 
 settings_manager = SettingsManager()
-

@@ -39,6 +39,10 @@ class AppSettings(BaseSettings):
     youtube_client_id: str = ""
     youtube_client_secret: str = ""
 
+    # Wan 2.1 / Open-Source Image-to-Video
+    wan_api_url: str = "http://host.docker.internal:8188"
+    wan_api_key: str = ""
+
     # Piper TTS
     piper_model_path: str = "/data/piper-models"
 
@@ -73,6 +77,26 @@ class AppSettings(BaseSettings):
     @property
     def renders_dir(self) -> Path:
         p = Path(self.data_dir) / "media" / "renders"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def sprites_dir(self) -> Path:
+        p = Path(self.data_dir) / "media" / "sprites"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def clips_dir(self) -> Path:
+        """Pad naar geanimeerde videoclips (Google Veo, Wan 2.1, uploads)."""
+        p = Path(self.data_dir) / "media" / "clips"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
+    def exports_dir(self) -> Path:
+        """Pad naar Google Flow bulk export zip bestanden."""
+        p = Path(self.data_dir) / "media" / "exports"
         p.mkdir(parents=True, exist_ok=True)
         return p
 

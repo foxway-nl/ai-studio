@@ -84,9 +84,12 @@ class CharacterCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = ""
     personality: str = ""
-    voice_id: str = ""
-    voice_provider: str = "piper"
+    voice_id: str = "nl-NL-FennaNeural"
+    voice_provider: str = "edge_tts"
+    voice_pitch: str = "+15Hz"
+    voice_rate: str = "+0%"
     style_prompt: str = ""
+    visual_dna_prompt: str = ""
     color_palette: str = ""
 
 
@@ -96,7 +99,10 @@ class CharacterUpdate(BaseModel):
     personality: Optional[str] = None
     voice_id: Optional[str] = None
     voice_provider: Optional[str] = None
+    voice_pitch: Optional[str] = None
+    voice_rate: Optional[str] = None
     style_prompt: Optional[str] = None
+    visual_dna_prompt: Optional[str] = None
     color_palette: Optional[str] = None
 
 
@@ -120,11 +126,15 @@ class CharacterResponse(BaseModel):
     personality: str
     voice_id: str
     voice_provider: str
+    voice_pitch: str = "+15Hz"
+    voice_rate: str = "+0%"
     sprite_base_path: Optional[str]
     sprite_url: Optional[str] = None
     style_prompt: str
+    visual_dna_prompt: str = ""
     color_palette: str
     reference_images: list[str] = []
+    reference_image_urls: list[str] = []
     expressions: list[ExpressionResponse] = []
     created_at: datetime
     updated_at: datetime
@@ -140,6 +150,8 @@ class EpisodeCreate(BaseModel):
     description: str = ""
     episode_number: int = Field(default=1, ge=1)
     target_duration_seconds: int = Field(default=720, ge=60, le=1800)
+    target_audience: str = "kids"  # kids | general
+    made_for_kids: bool = True
 
 
 class EpisodeUpdate(BaseModel):
@@ -155,6 +167,8 @@ class EpisodeUpdate(BaseModel):
     seo_tags: Optional[str] = None
     thumbnail_prompt: Optional[str] = None
     bg_music_path: Optional[str] = None
+    target_audience: Optional[str] = None
+    made_for_kids: Optional[bool] = None
     status: Optional[str] = None
 
 
@@ -173,6 +187,8 @@ class EpisodeResponse(BaseModel):
     seo_tags: str
     thumbnail_prompt: str
     thumbnail_path: Optional[str]
+    target_audience: str = "kids"
+    made_for_kids: bool = True
     bg_music_path: str = ""
     status: str
     scene_count: int = 0
@@ -196,13 +212,19 @@ class SceneCreate(BaseModel):
     title: str = ""
     chapter_type: str = "chapter"
     speaker: str = ""
+    active_speaker: str = "verteller"
     narration_text: Optional[str] = None
     narration: Optional[str] = None
     phonetic_text: str = ""
     visual_prompt: str = ""
     background_prompt: str = ""
     image_prompt: str = ""
+    motion_prompt: str = ""
+    video_clip_path: Optional[str] = None
+    video_clip_url: Optional[str] = None
+    animation_engine: str = "veo"
     character_ids: Any = ""
+    characters_in_scene: Any = None
     character_positions: str = ""
     use_2d_sprite: bool = False
     sprite_config_json: str = ""
@@ -220,13 +242,18 @@ class SceneUpdate(BaseModel):
     title: Optional[str] = None
     chapter_type: Optional[str] = None
     speaker: Optional[str] = None
+    active_speaker: Optional[str] = None
     narration_text: Optional[str] = None
     narration: Optional[str] = None
     phonetic_text: Optional[str] = None
     visual_prompt: Optional[str] = None
     background_prompt: Optional[str] = None
     image_prompt: Optional[str] = None
+    motion_prompt: Optional[str] = None
+    video_clip_path: Optional[str] = None
+    animation_engine: Optional[str] = None
     character_ids: Any = None
+    characters_in_scene: Any = None
     character_positions: Optional[str] = None
     use_2d_sprite: Optional[bool] = None
     sprite_config_json: Optional[str] = None
@@ -273,13 +300,19 @@ class SceneResponse(BaseModel):
     title: str
     chapter_type: str = "chapter"
     speaker: str = ""
+    active_speaker: str = "verteller"
     narration_text: str = ""
     narration: str = ""
     phonetic_text: str = ""
     visual_prompt: str = ""
     background_prompt: str = ""
     image_prompt: str = ""
+    motion_prompt: str = ""
+    video_clip_path: Optional[str] = None
+    video_clip_url: Optional[str] = None
+    animation_engine: str = "veo"
     character_ids: Any = ""
+    characters_in_scene: Any = []
     character_positions: str = ""
     use_2d_sprite: bool = False
     sprite_config_json: str = ""
@@ -454,6 +487,46 @@ class TTSResponse(BaseModel):
     word_timestamps: list[dict]
 
 
+class VoiceTestRequest(BaseModel):
+    voice_id: str = "nl-NL-FennaNeural"
+    voice_provider: str = "edge_tts"
+    text: str = "Hoi allemaal! Vandaag gaan we samen op avontuur, doen jullie mee?"
+    pitch: str = "+15Hz"
+    rate: str = "+0%"
+
+
+class VoiceTestResponse(BaseModel):
+    audio_url: str
+    duration_seconds: float
+    voice_id: str
+    message: str = "Audio succesvol gegenereerd"
+
+
+class GeminiTestRequest(BaseModel):
+    api_key: Optional[str] = None
+
+
+class GeminiTestResponse(BaseModel):
+    valid: bool
+    status_code: int
+    models: list[str] = []
+    text_models: list[str] = []
+    image_models: list[str] = []
+    message: str = ""
+    error: Optional[str] = None
+
+
+class YouTubeChannelResponse(BaseModel):
+    connected: bool = False
+    id: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    custom_url: Optional[str] = None
+    avatar_url: Optional[str] = None
+    subscriber_count: Optional[str] = None
+    video_count: Optional[str] = None
+
+
 # ─────────────────────────────────────────────────────────────
 # Generiek
 # ─────────────────────────────────────────────────────────────
@@ -470,4 +543,32 @@ class TaskStatusResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "1.0.0"
+
+
+# ─────────────────────────────────────────────────────────────
+# Video Animatie (Image-to-Video: Google Veo, Wan 2.1, Flow)
+# ─────────────────────────────────────────────────────────────
+
+
+class AnimateSceneRequest(BaseModel):
+    animation_engine: str = "veo"  # veo | wan | ken_burns
+    motion_prompt: Optional[str] = None
+
+
+class AnimateSceneResponse(BaseModel):
+    scene_id: str
+    video_clip_url: str
+    video_clip_path: str
+    duration: float
+    animation_engine: str
+    message: str
+
+
+class ExportFlowResponse(BaseModel):
+    zip_url: str
+    zip_path: str
+    manifest_url: Optional[str] = None
+    scene_count: int
+    message: str
+
 

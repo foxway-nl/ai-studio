@@ -16,6 +16,8 @@ from app.core.config import settings
 from app.core.database import get_session
 from app.models.models import Episode, Scene
 from app.schemas.schemas import (
+    AnimateSceneRequest,
+    AnimateSceneResponse,
     EpisodeGuardrailsResponse,
     GuardrailIssue,
     SceneCreate,
@@ -24,6 +26,7 @@ from app.schemas.schemas import (
     SceneUpdate,
 )
 from app.services.guardrails_service import guardrails_service
+from app.services.image_service import to_media_url
 from app.services.script_service import recalculate_timings
 
 logger = logging.getLogger(__name__)
@@ -43,13 +46,13 @@ class SelectImagePayload(BaseModel):
 def _image_url(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
-    return f"/media/images/{Path(path).name}"
+    return to_media_url(path)
 
 
 def _audio_url(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
-    return f"/media/audio/{Path(path).name}"
+    return to_media_url(path)
 
 
 def _parse_json_list(raw: str) -> list:
@@ -82,6 +85,7 @@ def _scene_to_response(scene: Scene) -> SceneResponse:
     char_ids_list = [
         c.strip() for c in (scene.character_ids or "").split(",") if c.strip()
     ]
+    chars_in_scene = _parse_json_list(getattr(scene, "characters_in_scene", "[]"))
 
     return SceneResponse(
         id=scene.id,
@@ -97,7 +101,12 @@ def _scene_to_response(scene: Scene) -> SceneResponse:
         visual_prompt=scene.visual_prompt,
         background_prompt=scene.background_prompt,
         image_prompt=scene.image_prompt,
+        motion_prompt=scene.motion_prompt or "",
+        video_clip_path=scene.video_clip_path,
+        video_clip_url=to_media_url(scene.video_clip_path) if scene.video_clip_path else None,
+        animation_engine=scene.animation_engine or "veo",
         character_ids=char_ids_list,
+        characters_in_scene=chars_in_scene,
         character_positions=scene.character_positions,
         use_2d_sprite=scene.use_2d_sprite,
         sprite_config_json=scene.sprite_config_json,
@@ -209,18 +218,33 @@ async def create_scene(
     elif char_ids is None:
         char_ids = ""
 
+    chars_in_scene_str = "[]"
+    if hasattr(data, "characters_in_scene") and data.characters_in_scene is not None:
+        if isinstance(data.characters_in_scene, list):
+            chars_in_scene_str = json.dumps([
+                c.model_dump() if hasattr(c, "model_dump") else c
+                for c in data.characters_in_scene
+            ], ensure_ascii=False)
+        elif isinstance(data.characters_in_scene, str):
+            chars_in_scene_str = data.characters_in_scene
+
     scene = Scene(
         episode_id=target_ep_id,
         scene_number=sc_num,
         title=data.title,
         chapter_type=data.chapter_type,
         speaker=data.speaker,
+        active_speaker=data.active_speaker or data.speaker or "verteller",
         narration_text=narr,
         phonetic_text=data.phonetic_text,
         visual_prompt=data.visual_prompt,
         background_prompt=data.background_prompt,
         image_prompt=data.image_prompt,
+        motion_prompt=data.motion_prompt or "",
+        video_clip_path=data.video_clip_path,
+        animation_engine=data.animation_engine or "veo",
         character_ids=char_ids,
+        characters_in_scene=chars_in_scene_str,
         character_positions=data.character_positions,
         use_2d_sprite=data.use_2d_sprite,
         sprite_config_json=data.sprite_config_json,
@@ -273,6 +297,15 @@ async def update_scene(
         update_dict["character_ids"] = ",".join(
             str(c) for c in update_dict["character_ids"]
         )
+    if "characters_in_scene" in update_dict and update_dict["characters_in_scene"] is not None:
+        cis = update_dict["characters_in_scene"]
+        if isinstance(cis, list):
+            update_dict["characters_in_scene"] = json.dumps([
+                c.model_dump() if hasattr(c, "model_dump") else c
+                for c in cis
+            ], ensure_ascii=False)
+        elif isinstance(cis, str):
+            update_dict["characters_in_scene"] = cis
 
     for key, value in update_dict.items():
         if hasattr(scene, key) and value is not None:
@@ -442,3 +475,151 @@ async def upload_scene_audio(
     session.commit()
     session.refresh(scene)
     return _scene_to_response(scene)
+
+
+# ─── Image-to-Video Animatie Routes (Veo 2.0, Wan 2.1, Upload) ────────────────
+
+
+@router.post("/api/scenes/{scene_id}/animate", response_model=AnimateSceneResponse)
+async def animate_scene(
+    scene_id: str,
+    payload: Optional[AnimateSceneRequest] = None,
+    session: Session = Depends(get_session),
+):
+    """Genereer een echte videoclip van het Start-Frame met Google Veo 2.0 of Wan 2.1."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scène niet gevonden.")
+
+    start_frame = scene.composite_image_path or scene.background_image_path
+    if not start_frame or not os.path.exists(start_frame) or os.path.getsize(start_frame) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Genereer of selecteer eerst een geldig Start-Frame plaatje voor deze scène.",
+        )
+
+    engine = payload.animation_engine if payload and payload.animation_engine else (scene.animation_engine or "veo")
+    motion = payload.motion_prompt if payload and payload.motion_prompt else (scene.motion_prompt or "")
+
+    if not motion.strip():
+        from app.services.gemini_service import gemini_service
+        try:
+            motion = await gemini_service.generate_scene_motion_prompt(
+                scene_description=scene.visual_prompt or scene.narration_text,
+                narration=scene.narration_text,
+            )
+            scene.motion_prompt = motion
+        except Exception:
+            motion = "Lively 2D cartoon animation: characters move, gesture and talk expressively."
+
+    from app.services.video_animation_service import video_animation_service
+    out_path = str(settings.clips_dir / f"scene_{scene_id}.mp4")
+
+    try:
+        if engine == "wan":
+            clip_path = await video_animation_service.generate_wan_video(
+                image_path=start_frame,
+                motion_prompt=motion,
+                output_path=out_path,
+            )
+        else:
+            # Veo 2.0
+            clip_path = await video_animation_service.generate_veo_video(
+                image_path=start_frame,
+                motion_prompt=motion,
+                output_path=out_path,
+            )
+    except Exception as e:
+        logger.error("Animatiefout scène %s: %s", scene_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    scene.video_clip_path = clip_path
+    scene.animation_engine = engine
+    scene.motion_prompt = motion
+    scene.updated_at = datetime.now(timezone.utc)
+    session.add(scene)
+    session.commit()
+    session.refresh(scene)
+
+    from app.services.ffmpeg_service import ffmpeg_service
+    dur = await ffmpeg_service.get_duration(clip_path)
+
+    return AnimateSceneResponse(
+        scene_id=scene_id,
+        video_clip_url=to_media_url(clip_path) or "",
+        video_clip_path=clip_path,
+        duration=round(dur, 2),
+        animation_engine=engine,
+        message="Animatieclip succesvol gegenereerd!",
+    )
+
+
+@router.post("/api/scenes/{scene_id}/upload-clip", response_model=AnimateSceneResponse)
+async def upload_scene_clip(
+    scene_id: str,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    """Upload een eigen .mp4 videoclip (bijv. gegenereerd via Google Flow of Gemini Web)."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scène niet gevonden.")
+
+    content_type = file.content_type or ""
+    filename = file.filename or ""
+    if not filename.lower().endswith((".mp4", ".mov", ".webm", ".mkv")) and "video" not in content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Ongeldig bestandstype. Upload een .mp4 videobestand.",
+        )
+
+    file_bytes = await file.read()
+    from app.services.video_animation_service import video_animation_service
+    dest_path, clip_url = await video_animation_service.save_uploaded_clip(
+        scene_id=scene_id,
+        file_bytes=file_bytes,
+        filename=filename,
+    )
+
+    from app.services.ffmpeg_service import ffmpeg_service
+    dur = await ffmpeg_service.get_duration(dest_path)
+
+    scene.video_clip_path = dest_path
+    scene.animation_engine = "manual_upload"
+    scene.updated_at = datetime.now(timezone.utc)
+    session.add(scene)
+    session.commit()
+    session.refresh(scene)
+
+    return AnimateSceneResponse(
+        scene_id=scene_id,
+        video_clip_url=clip_url,
+        video_clip_path=dest_path,
+        duration=round(dur, 2),
+        animation_engine="manual_upload",
+        message="Videoclip succesvol geüpload en gekoppeld!",
+    )
+
+
+@router.post("/api/scenes/{scene_id}/generate-motion-prompt")
+async def generate_motion_prompt_route(
+    scene_id: str,
+    session: Session = Depends(get_session),
+):
+    """Genereert via Gemini Pro een gerichte Engelse motion prompt voor de scène."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scène niet gevonden.")
+
+    from app.services.gemini_service import gemini_service
+    chars = [c.get("name") for c in _parse_json_list(scene.characters_in_scene) if isinstance(c, dict) and c.get("name")]
+    prompt = await gemini_service.generate_scene_motion_prompt(
+        scene_description=scene.visual_prompt or scene.title,
+        narration=scene.narration_text,
+        characters=chars,
+    )
+    scene.motion_prompt = prompt
+    scene.updated_at = datetime.now(timezone.utc)
+    session.add(scene)
+    session.commit()
+    return {"scene_id": scene_id, "motion_prompt": prompt}

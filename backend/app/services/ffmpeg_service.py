@@ -12,6 +12,7 @@ Biedt:
 import asyncio
 import json
 import logging
+import math
 import os
 import shutil
 import tempfile
@@ -168,10 +169,19 @@ class FFmpegService:
         audio_path: str,
         timestamps: List[Dict[str, Any]],
         output_path: str,
+        speaker: str = "verteller",
+        mouth_x: int = 960,
+        mouth_y: int = 700,
     ) -> str:
-        """Voeg gesproken audio toe en animeer mond-sprites tijdens gesproken intervallen."""
-        # Als er geen aparte mondsprites zijn, voeg simpelweg audio toe
-        if not mouth_open_path or not mouth_closed_path or not os.path.exists(mouth_open_path):
+        """Voeg gesproken audio toe en animeer mond-sprites tijdens gesproken intervallen.
+        
+        Als speaker 'verteller' is, bewegen de karakters niet mee (puur voice-over).
+        """
+        resolved_open = self._resolve_media_path(mouth_open_path)
+        speaker_lower = (speaker or "").lower().strip()
+
+        # Als er geen spreker is of spreker is de verteller: géén mond-animatie nodig
+        if not resolved_open or speaker_lower in ("verteller", "voiceover", "voice-over", "geen", ""):
             cmd = [
                 self.ffmpeg_bin,
                 "-y",
@@ -191,16 +201,28 @@ class FFmpegService:
             await self._run_command(cmd)
             return output_path
 
-        # Lip-sync overlay via FFmpeg complex filter:
-        # Wissel sprite tussen open en gesloten tijdens spraaksegmenten
-        overlay_filter = "[0:v][1:v]overlay=enable='between(t,0,10)'[v]"
+        # Bereken tijdsintervallen waarin de mond open gaat
+        conditions = []
+        for ts in (timestamps or []):
+            st = float(ts.get("start", 0))
+            en = float(ts.get("end", 0))
+            if en > st and (en - st) >= 0.05:
+                conditions.append(f"between(t,{st:.2f},{en:.2f})")
+
+        if conditions:
+            # Combineer intervallen
+            enable_expr = "+".join(conditions[:60])
+        else:
+            enable_expr = "between(t,0.3,5.0)"
+
+        overlay_filter = f"[0:v][1:v]overlay=x={mouth_x}:y={mouth_y}:enable='{enable_expr}'[v]"
         cmd = [
             self.ffmpeg_bin,
             "-y",
             "-i",
             base_scene_video,
             "-i",
-            mouth_open_path,
+            resolved_open,
             "-i",
             audio_path,
             "-filter_complex",
@@ -219,10 +241,10 @@ class FFmpegService:
         try:
             await self._run_command(cmd)
             return output_path
-        except Exception:
-            # Fallback op standaard audio multiplexing
+        except Exception as exc:
+            logger.warning("Lip-sync filter faalde (%s); val terug op directe audiokoppeling.", exc)
             return await self.create_lip_sync_video(
-                base_scene_video, None, None, audio_path, timestamps, output_path
+                base_scene_video, None, None, audio_path, [], output_path, speaker="verteller"
             )
 
     async def mix_audio_tracks(
@@ -343,14 +365,25 @@ class FFmpegService:
 
     @staticmethod
     def _resolve_media_path(path: Optional[str]) -> Optional[str]:
-        """Accepteer zowel absolute paden als /media/... URL's."""
+        """Accepteer zowel absolute paden als /api/media/ of /media/ URL's."""
         if not path:
             return None
-        if os.path.exists(path):
-            return path
-        if path.startswith("/media/"):
-            candidate = settings.media_dir / path[len("/media/") :]
-            if candidate.exists():
+        p = str(path).strip()
+        if not p:
+            return None
+        if os.path.exists(p) and os.path.getsize(p) > 0:
+            return p
+        if p.startswith("/api/media/"):
+            candidate = settings.media_dir / p[len("/api/media/") :]
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return str(candidate)
+        if p.startswith("/media/"):
+            candidate = settings.media_dir / p[len("/media/") :]
+            if candidate.exists() and candidate.stat().st_size > 0:
+                return str(candidate)
+        if p.startswith("/data/media/"):
+            candidate = settings.media_dir / p[len("/data/media/") :]
+            if candidate.exists() and candidate.stat().st_size > 0:
                 return str(candidate)
         return None
 
@@ -506,6 +539,182 @@ class FFmpegService:
         await self._run_command(cmd)
         return output_path
 
+    async def _animated_scene_clip(
+        self,
+        video_path: str,
+        audio_path: Optional[str],
+        sfx_path: Optional[str],
+        target_duration: float,
+        output_path: str,
+        width: int,
+        height: int,
+        fps: int,
+    ) -> str:
+        """Synchroniseert een AI-gegenereerde videoclip (Veo, Wan) exact met de audio.
+        
+        Gebruikt time-stretch (setpts) als het verschil < 30% is, of een naadloze
+        ping-pong loop (vooruit + achteruit) zodat de videoclip op de milliseconde
+        aansluit op de gesproken kinderteksst zonder zwarte beelden of abrupte freeze frames.
+        """
+        source_dur = await self.get_duration(video_path)
+        source_dur = max(0.5, source_dur)
+        target_dur = max(0.5, float(target_duration))
+
+        # Schaal & normaliseer filter
+        base_scale = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
+            f"fps={fps},format=yuv420p"
+        )
+
+        ratio = target_dur / source_dur
+
+        if 0.7 <= ratio <= 1.3:
+            # Vloeiende snelheidsaanpassing (Time-stretch)
+            video_filter = f"{base_scale},setpts={ratio:.4f}*PTS,trim=duration={target_dur:.3f}"
+            inputs = ["-i", video_path]
+        elif target_dur > source_dur:
+            # Ping-pong loop (vooruit + achteruit) om naadloos de langere spraakduur te vullen
+            # Maak een loop van bron + reverse
+            loops_needed = int(math.ceil(target_dur / (source_dur * 2))) + 1
+            loop_filter = (
+                f"[0:v]{base_scale},split=2[v_fwd][v_rev_in];"
+                f"[v_rev_in]reverse[v_rev];"
+                f"[v_fwd][v_rev]concat=n=2:v=1:a=0[v_pingpong];"
+                f"[v_pingpong]loop=loop={loops_needed}:size=32767:start=0,"
+                f"trim=duration={target_dur:.3f},setpts=PTS-STARTPTS[vout]"
+            )
+            video_filter = loop_filter
+            inputs = ["-i", video_path]
+        else:
+            # Clip is langer dan nodig: trim netjes af
+            video_filter = f"{base_scale},trim=duration={target_dur:.3f},setpts=PTS-STARTPTS"
+            inputs = ["-i", video_path]
+
+        cmd = [self.ffmpeg_bin, "-y"] + inputs
+
+        resolved_audio = self._resolve_media_path(audio_path)
+        resolved_sfx = self._resolve_media_path(sfx_path)
+
+        if resolved_audio:
+            cmd += ["-i", resolved_audio]
+            audio_filters = [
+                (
+                    f"[1:a]aresample=44100,"
+                    "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                    f"apad=whole_dur={target_dur:.3f},"
+                    f"atrim=duration={target_dur:.3f},asetpts=PTS-STARTPTS[a1]"
+                )
+            ]
+            if resolved_sfx:
+                cmd += ["-i", resolved_sfx]
+                audio_filters.append(
+                    (
+                        f"[2:a]aresample=44100,"
+                        "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                        "volume=0.25,"
+                        f"apad=whole_dur={target_dur:.3f},"
+                        f"atrim=duration={target_dur:.3f},asetpts=PTS-STARTPTS[a2]"
+                    )
+                )
+                audio_filters.append(
+                    "[a1][a2]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                )
+            else:
+                audio_filters.append("[a1]anull[aout]")
+            audio_str = ";".join(audio_filters)
+        elif resolved_sfx:
+            cmd += ["-i", resolved_sfx]
+            audio_str = (
+                "[1:a]aresample=44100,"
+                "aformat=sample_fmts=fltp:channel_layouts=stereo,"
+                "volume=0.25,"
+                f"apad=whole_dur={target_dur:.3f},"
+                f"atrim=duration={target_dur:.3f},asetpts=PTS-STARTPTS[aout]"
+            )
+        else:
+            audio_str = None
+
+        if "concat" in video_filter:
+            # Filter complex met meerdere labels
+            if audio_str:
+                full_filter = f"{video_filter};{audio_str}"
+                cmd += [
+                    "-filter_complex",
+                    full_filter,
+                    "-map",
+                    "[vout]",
+                    "-map",
+                    "[aout]",
+                ]
+            else:
+                cmd += [
+                    "-filter_complex",
+                    video_filter,
+                    "-map",
+                    "[vout]",
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    f"{target_dur:.3f}",
+                    "-i",
+                    "anullsrc=r=44100:cl=stereo",
+                    "-map",
+                    "1:a:0",
+                ]
+        else:
+            # Eenvoudige filter
+            if audio_str:
+                full_filter = f"[0:v]{video_filter}[vout];{audio_str}"
+                cmd += [
+                    "-filter_complex",
+                    full_filter,
+                    "-map",
+                    "[vout]",
+                    "-map",
+                    "[aout]",
+                ]
+            else:
+                cmd += [
+                    "-vf",
+                    video_filter,
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    f"{target_dur:.3f}",
+                    "-i",
+                    "anullsrc=r=44100:cl=stereo",
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
+                ]
+
+        cmd += [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-t",
+            f"{target_dur:.3f}",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+
+        await self._run_command(cmd)
+        return output_path
+
     async def _video_clip(
         self,
         video_path: str,
@@ -648,17 +857,35 @@ class FFmpegService:
                     )
 
                 clip_out = str(temp_dir / f"scene_{idx:03d}.mp4")
-                video_path = self._resolve_media_path(sc.get("video_path"))
-                if video_path:
+                video_clip_path = self._resolve_media_path(
+                    sc.get("video_clip_path") or sc.get("video_path")
+                )
+                dur = max(0.5, float(sc.get("duration_seconds", 8.0) or 8.0))
+
+                if video_clip_path and sc.get("title", "").endswith("bumper"):
+                    # Vaste intro/outro bumper
                     await self._video_clip(
-                        video_path=video_path,
+                        video_path=video_clip_path,
                         output_path=clip_out,
                         width=w,
                         height=h,
                         fps=fps,
-                        duration=sc.get("duration_seconds"),
+                        duration=dur,
+                    )
+                elif video_clip_path:
+                    # Echte geanimeerde videoclip (Google Veo, Wan 2.1 of Drag & Drop upload)
+                    await self._animated_scene_clip(
+                        video_path=video_clip_path,
+                        audio_path=sc.get("audio_path"),
+                        sfx_path=sc.get("sfx_track"),
+                        target_duration=dur,
+                        output_path=clip_out,
+                        width=w,
+                        height=h,
+                        fps=fps,
                     )
                 else:
+                    # 2.5D Ken Burns Fallback met het Start-Frame
                     img_path = self._resolve_media_path(
                         sc.get("composite_image_path")
                         or sc.get("background_image_path")
@@ -670,7 +897,6 @@ class FFmpegService:
                             sc.get("title", f"Scène {idx + 1}"), width=w, height=h
                         )
 
-                    dur = max(0.5, float(sc.get("duration_seconds", 8.0) or 8.0))
                     await self._scene_clip(
                         image_path=img_path,
                         audio_path=sc.get("audio_path"),

@@ -60,16 +60,22 @@ class GenerateThumbnailPayload(BaseModel):
     prompt: Optional[str] = None
 
 
+from app.services.image_service import to_media_url
+
+
 def _image_url(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
-    return f"/media/images/{Path(path).name}"
+    p = Path(path)
+    if p.exists() and p.stat().st_size > 0:
+        return to_media_url(path)
+    return to_media_url(path)
 
 
 def _audio_url(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
-    return f"/media/audio/{Path(path).name}"
+    return to_media_url(path)
 
 
 def _load_history(raw: str) -> List[Dict[str, Any]]:
@@ -235,6 +241,13 @@ async def start_image_generation(
         raise HTTPException(status_code=404, detail="Scène niet gevonden.")
 
     # Alles wat de achtergrondtaak nodig heeft vóór de sessie sluit vastleggen.
+    char_ids = [c.strip() for c in (scene.character_ids or "").split(",") if c.strip()]
+    char_descriptions = []
+    for cid in char_ids:
+        ch = session.get(Character, cid)
+        if ch:
+            char_descriptions.append(f"{ch.name} ({ch.description or ch.personality or ch.style_prompt})")
+
     scene_snapshot = {
         "id": scene.id,
         "title": scene.title,
@@ -246,6 +259,7 @@ async def start_image_generation(
         "history": _load_history(scene.image_history_json),
         "use_2d_sprite": scene.use_2d_sprite,
         "character_config": _scene_character_config(scene),
+        "char_descriptions": char_descriptions,
     }
 
     task_id = f"img_{payload.scene_id}_{uuid.uuid4().hex[:6]}"
@@ -253,7 +267,7 @@ async def start_image_generation(
     async def _run():
         from app.services.image_service import image_service
 
-        prompt = (
+        base_prompt = (
             payload.prompt
             or scene_snapshot["image_prompt"]
             or scene_snapshot["visual_prompt"]
@@ -262,6 +276,19 @@ async def start_image_generation(
             or scene_snapshot["title"]
             or "vrolijke kleurrijke kinderscène"
         )
+
+        use_sprite = (
+            payload.use_2d_sprite
+            if payload.use_2d_sprite is not None
+            else scene_snapshot["use_2d_sprite"]
+        )
+
+        # Als 'Volledige AI Scène' (zonder 2.5D sprites), voeg alle karakters samen in de prompt
+        if not use_sprite and scene_snapshot.get("char_descriptions"):
+            chars_summary = ", ".join(scene_snapshot["char_descriptions"])
+            prompt = f"{base_prompt}, featuring characters: {chars_summary}"
+        else:
+            prompt = base_prompt
 
         task_manager.update_progress(task_id, 0.15, "Beeldprompt voorbereiden...")
         if payload.enhance_prompt:
@@ -272,20 +299,15 @@ async def start_image_generation(
             except Exception as exc:
                 logger.warning("Prompt-verbetering mislukt: %s", exc)
 
-        task_manager.update_progress(task_id, 0.4, "AI achtergrond renderen...")
+        task_manager.update_progress(task_id, 0.4, "AI beeld renderen via primaire engine...")
         background_path = await image_service.generate_image(
             prompt=prompt,
             width=payload.width,
             height=payload.height,
-            provider=payload.provider or "sdwebui",
+            provider=payload.provider,
         )
 
         composite_path = background_path
-        use_sprite = (
-            payload.use_2d_sprite
-            if payload.use_2d_sprite is not None
-            else scene_snapshot["use_2d_sprite"]
-        )
         if use_sprite and scene_snapshot["character_config"]:
             task_manager.update_progress(
                 task_id, 0.7, "2.5D karakter-sprites compositen..."
@@ -390,21 +412,27 @@ def _audio_provider_for_speaker(
     speaker: str,
     episode_id: str,
     requested_provider: Optional[str],
-) -> tuple[str, str]:
-    """Bepaal stemprovider en voice-id, met karakterstem als voorkeur."""
+) -> tuple[str, str, str, str]:
+    """Bepaal stemprovider, voice-id, pitch en rate, met karakterstem als voorkeur."""
     if requested_provider:
-        return requested_provider, ""
+        return requested_provider, "", "+15Hz", "+0%"
     character = resolve_speaker_voice(db, speaker, episode_id)
     if character and character.voice_provider:
-        return character.voice_provider, character.voice_id or ""
-    return "piper", ""
+        return (
+            character.voice_provider,
+            character.voice_id or "nl-NL-FennaNeural",
+            character.voice_pitch or "+15Hz",
+            character.voice_rate or "+0%",
+        )
+    return "edge_tts", "nl-NL-FennaNeural", "+15Hz", "+0%"
 
 
 def _audio_provider_for_scene(
     db: Session, scene: Scene, requested_provider: Optional[str]
-) -> tuple[str, str]:
+) -> tuple[str, str, str, str]:
+    active_spk = scene.active_speaker or scene.speaker
     return _audio_provider_for_speaker(
-        db, scene.speaker, scene.episode_id, requested_provider
+        db, active_spk, scene.episode_id, requested_provider
     )
 
 
@@ -426,7 +454,7 @@ async def start_audio_generation(
     if not text:
         raise HTTPException(status_code=400, detail="Scène bevat geen gesproken tekst.")
 
-    provider, voice_id = _audio_provider_for_scene(
+    provider, voice_id, pitch, rate = _audio_provider_for_scene(
         session, scene, payload.provider
     )
     if payload.voice_id:
@@ -444,6 +472,8 @@ async def start_audio_generation(
             text=text,
             voice_id=voice_id,
             provider=provider,
+            pitch=pitch,
+            rate=rate,
             language="nl",
         )
 

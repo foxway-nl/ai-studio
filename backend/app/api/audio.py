@@ -1,12 +1,13 @@
-"""Audio API router – audio tracks, TTS synthese en uploads."""
+"""Audio API router – audio tracks, TTS synthese, voice testing en uploads."""
 
+import json
 import logging
 import os
 import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlmodel import Session, select
@@ -14,12 +15,62 @@ from sqlmodel import Session, select
 from app.core.config import settings
 from app.core.database import get_session
 from app.models.models import AudioTrack, Episode
-from app.schemas.schemas import AudioTrackCreate, AudioTrackResponse, AudioTrackUpdate
+from app.schemas.schemas import (
+    AudioTrackCreate,
+    AudioTrackResponse,
+    AudioTrackUpdate,
+    VoiceTestRequest,
+    VoiceTestResponse,
+)
+from app.services.image_service import to_media_url
 from app.workers.task_manager import task_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/episodes/{episode_id}/audio", tags=["Audio"])
+top_audio_router = APIRouter(prefix="/api/audio", tags=["Audio Management"])
+
+
+# ─────────────────────────────────────────────────────────────
+# Top-level Voice endpoints (Testing & Discovery)
+# ─────────────────────────────────────────────────────────────
+
+
+@top_audio_router.get("/voices")
+async def get_voices() -> Dict[str, Any]:
+    """Haal alle beschikbare kinder- en vertelstemmen op."""
+    from app.services.audio_service import audio_service
+
+    return audio_service.get_available_voices()
+
+
+@top_audio_router.post("/test-voice", response_model=VoiceTestResponse)
+async def test_voice(payload: VoiceTestRequest):
+    """Test direct een stem met de voorbeeldzin en geef de audio URL terug."""
+    from app.services.audio_service import audio_service
+
+    out_file = settings.audio_dir / f"test_voice_{uuid.uuid4().hex[:8]}.mp3"
+    audio_path = await audio_service.generate_tts(
+        text=payload.text,
+        voice_id=payload.voice_id,
+        provider=payload.voice_provider,
+        pitch=payload.pitch,
+        rate=payload.rate,
+        output_path=str(out_file),
+    )
+
+    duration = audio_service.get_audio_duration(audio_path)
+    return VoiceTestResponse(
+        audio_url=to_media_url(audio_path) or f"/api/media/audio/{out_file.name}",
+        duration_seconds=duration,
+        voice_id=payload.voice_id,
+        message="Stemtest succesvol gegenereerd!",
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Episode Audio Tracks
+# ─────────────────────────────────────────────────────────────
 
 
 @router.get("", response_model=List[AudioTrackResponse])
@@ -29,6 +80,10 @@ async def list_audio_tracks(episode_id: str, session: Session = Depends(get_sess
     tracks = session.exec(
         select(AudioTrack).where(AudioTrack.episode_id == episode_id).order_by(AudioTrack.start_time.asc())
     ).all()
+    # Zorg dat file_path gegarandeerd /api/media/... is
+    for t in tracks:
+        if t.file_path and not t.file_path.startswith("/api/"):
+            t.file_path = to_media_url(t.file_path) or t.file_path
     return tracks
 
 
@@ -46,7 +101,8 @@ async def generate_narration_track(
 
     from app.services.audio_service import audio_service
 
-    out_file = settings.audio_dir / f"track_{episode_id}_{uuid.uuid4().hex[:6]}.wav"
+    ext = ".mp3" if "edge" in (data.voice_provider or "edge_tts").lower() else ".wav"
+    out_file = settings.audio_dir / f"track_{episode_id}_{uuid.uuid4().hex[:6]}{ext}"
     audio_path = await audio_service.generate_tts(
         text=text or episode.title,
         voice_id=data.voice_id,
@@ -56,13 +112,12 @@ async def generate_narration_track(
 
     duration = audio_service.get_audio_duration(audio_path)
     timestamps = await audio_service.get_word_timestamps(audio_path)
-    import json
 
     track = AudioTrack(
         episode_id=episode_id,
         track_type=data.track_type or "narration",
         name=data.name or "Gesproken tekst",
-        file_path=f"/media/audio/{out_file.name}",
+        file_path=f"/api/media/audio/{out_file.name}",
         duration_seconds=duration,
         volume=data.volume,
         start_time=data.start_time,
@@ -105,7 +160,7 @@ async def upload_audio_track(
         episode_id=episode_id,
         track_type=track_type,
         name=name,
-        file_path=f"/media/audio/{filename}",
+        file_path=f"/api/media/audio/{filename}",
         duration_seconds=dur,
         volume=0.3 if track_type == "music" else 1.0,
         start_time=0.0,
@@ -153,4 +208,3 @@ async def delete_audio_track(
     session.delete(track)
     session.commit()
     return {"detail": "Audiotrack verwijderd."}
-
