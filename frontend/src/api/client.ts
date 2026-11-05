@@ -375,6 +375,26 @@ export interface Settings {
     tts_models?: string[];
   };
   default_image_provider?: string;
+  // Groq Cloud Free Tier
+  groq_api_key?: string;
+  groq_api_key_set?: boolean;
+  // Hugging Face Free Tier & ZeroGPU
+  hf_token?: string;
+  hf_token_set?: boolean;
+  hf_video_space_id?: string;
+  // Taak Router
+  task_script_provider?: string;
+  task_script_model?: string;
+  task_prompt_provider?: string;
+  task_prompt_model?: string;
+  task_tts_provider?: string;
+  task_tts_voice?: string;
+  task_whisper_provider?: string;
+  task_image_provider?: string;
+  task_image_model?: string;
+  task_video_provider?: string;
+  task_video_model?: string;
+  // Overige services
   wan_api_url?: string;
   wan_api_key?: string;
   ollama_url: string;
@@ -383,6 +403,40 @@ export interface Settings {
   kokoro_url: string;
   youtube_client_id: string;
   youtube_client_secret: string;
+}
+
+export interface OllamaModelItem {
+  name: string;
+  model: string;
+  size_gb: number;
+  size_bytes?: number;
+  family: string;
+  parameter_size?: string;
+  quantization_level?: string;
+  modified_at?: string;
+}
+
+export interface OllamaProgressEvent {
+  status: string;
+  completed: number;
+  total: number;
+  percent: number;
+  error?: boolean;
+}
+
+export interface GroqInfoResponse {
+  connected: boolean;
+  models?: string[];
+  whisper_models?: string[];
+  error?: string;
+}
+
+export interface HfTestResponse {
+  connected: boolean;
+  user?: string | null;
+  type?: string;
+  can_pay?: boolean;
+  error?: string;
 }
 
 export interface GeminiTestResponse {
@@ -850,6 +904,105 @@ export async function uploadCharacterReference(characterId: string, file: File):
 export async function deleteCharacterReference(characterId: string, index: number): Promise<Character> {
   const res = await client.delete<Character>(`/characters/${characterId}/reference/${index}`);
   return res.data;
+}
+
+// ─── AI Model Beheercentrum & Providers API ─────────────────────────────────
+
+export async function getOllamaModels(): Promise<{ connected: boolean; models: OllamaModelItem[]; message?: string }> {
+  const res = await client.get<{ connected: boolean; models: OllamaModelItem[]; message?: string }>('/models/ollama/installed');
+  return res.data;
+}
+
+export async function deleteOllamaModel(name: string): Promise<{ status: string; message: string }> {
+  const res = await client.delete<{ status: string; message: string }>(`/models/ollama/${encodeURIComponent(name)}`);
+  return res.data;
+}
+
+export async function pullOllamaModel(
+  name: string,
+  onProgress: (event: OllamaProgressEvent) => void,
+  onComplete: () => void,
+  onError: (err: any) => void
+): Promise<void> {
+  try {
+    const response = await fetch('/api/models/ollama/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`HTTP error ${response.status}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data: OllamaProgressEvent = JSON.parse(line.slice(6));
+            onProgress(data);
+            if (data.percent >= 100 || data.status === 'success') {
+              onComplete();
+              return;
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    }
+    onComplete();
+  } catch (err) {
+    onError(err);
+  }
+}
+
+export async function getGroqModels(): Promise<GroqInfoResponse> {
+  const res = await client.get<GroqInfoResponse>('/models/groq');
+  return res.data;
+}
+
+export async function testGroqKey(apiKey?: string): Promise<GroqInfoResponse> {
+  const res = await client.post<GroqInfoResponse>('/models/test-groq', { api_key: apiKey });
+  return res.data;
+}
+
+export async function testHfToken(token?: string): Promise<HfTestResponse> {
+  const res = await client.post<HfTestResponse>('/models/test-hf', { token });
+  return res.data;
+}
+
+export async function getTaskRouterConfig(): Promise<Record<string, string>> {
+  const res = await client.get<Record<string, string>>('/models/router/config');
+  return res.data;
+}
+
+export async function updateTaskRouterConfig(cfg: Partial<Settings>): Promise<Record<string, string>> {
+  const res = await client.put<Record<string, string>>('/models/router/config', cfg);
+  return res.data;
+}
+
+export async function generateViralIdeas(
+  episodeId: string,
+  targetAudience: string = 'kids',
+  count: number = 5
+): Promise<string[]> {
+  const res = await client.post<{ episode_id: string; ideas: string[] }>(
+    `/models/episodes/${episodeId}/generate-ideas`,
+    { target_audience: targetAudience, count }
+  );
+  return res.data.ideas || [];
 }
 
 // ─── SSE Task Progress ──────────────────────────────────────────────────────

@@ -480,7 +480,9 @@ async def start_audio_generation(
         task_manager.update_progress(
             task_id, 0.6, "Woord-timestamps berekenen voor lip-sync..."
         )
-        timestamps = await audio_service.get_word_timestamps(audio_path)
+        from app.services.ai_router import ai_router
+
+        timestamps = await ai_router.get_word_timestamps(audio_path)
         audio_duration = audio_service.get_audio_duration(audio_path)
         total_duration = max(0.5, audio_duration + pause_after)
 
@@ -573,7 +575,9 @@ async def start_bulk_audio_generation(
                     provider=voice_provider,
                     language="nl",
                 )
-                timestamps = await audio_service.get_word_timestamps(audio_path)
+                from app.services.ai_router import ai_router
+
+                timestamps = await ai_router.get_word_timestamps(audio_path)
                 audio_duration = audio_service.get_audio_duration(audio_path)
                 pause_after = snapshot["pause_after_sec"]
 

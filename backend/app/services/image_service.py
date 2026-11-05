@@ -119,7 +119,20 @@ class ImageService:
         configured_provider = settings_manager.get("default_image_provider", "gemini").lower()
         active_provider = (provider or configured_provider or "gemini").lower()
 
-        # 1. SD WebUI Forge (alleen als expliciet gekozen)
+        # 1. Hugging Face FLUX.1-schnell
+        if active_provider in ("hf_flux", "huggingface", "flux"):
+            from app.services.huggingface_service import huggingface_service
+
+            filename = f"hf_{uuid.uuid4().hex[:10]}.png"
+            output_path = settings.images_dir / filename
+            return await huggingface_service.generate_image(
+                prompt=prompt,
+                output_path=str(output_path),
+                width=width,
+                height=height,
+            )
+
+        # 2. SD WebUI Forge (alleen als expliciet gekozen)
         if active_provider in ("sdwebui", "forge", "local"):
             return await self.generate_sdwebui(
                 prompt=prompt,

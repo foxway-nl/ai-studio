@@ -19,5 +19,9 @@ google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
 google-api-python-client==2.159.0
 sse-starlette==2.2.1
-edge-tts==7.0.2
+edge-tts>=7.3.1
+gradio_client>=1.6.0
+huggingface_hub>=0.28.0
+groq>=0.18.0
+mutagen>=1.47.0
 

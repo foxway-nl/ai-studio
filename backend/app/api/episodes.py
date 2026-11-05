@@ -220,20 +220,17 @@ async def generate_script(
     ep_id = episode.id
 
     async def _generate():
-        from app.services.gemini_service import gemini_service
+        from app.services.ai_router import ai_router
 
         task_manager.update_progress(task_id, 0.1, "Script generatie gestart...")
-        task_manager.update_progress(task_id, 0.2, "Script schrijven met Gemini...")
+        task_manager.update_progress(task_id, 0.2, "Script schrijven met gekozen AI-schrijver...")
 
-        result = await gemini_service.generate_script(
+        chars_list = [{"name": c} for c in (request.characters or [])]
+        result = await ai_router.generate_script(
             topic=request.topic,
-            target_age_min=request.target_age_min,
-            target_age_max=request.target_age_max,
-            duration_minutes=request.duration_minutes,
-            language=request.language,
-            style=request.style,
-            characters=request.characters,
-            additional_instructions=request.additional_instructions,
+            target_audience="kids" if (request.target_age_max or 7) <= 7 else "general",
+            characters=chars_list,
+            scene_count=max(3, int((request.duration_minutes or 2.0) * 3)),
         )
 
         task_manager.update_progress(task_id, 0.7, "Script en scènes opslaan...")

@@ -26,6 +26,26 @@ class AppSettings(BaseSettings):
     # Google Gemini
     gemini_api_key: str = ""
 
+    # Groq Cloud Free Tier
+    groq_api_key: str = ""
+
+    # Hugging Face Free Tier & ZeroGPU
+    hf_token: str = ""
+    hf_video_space_id: str = "multimodalart/Wan2.1-Fast"
+
+    # Taak-Router configuratie
+    task_script_provider: str = "gemini"
+    task_script_model: str = "gemini-2.5-flash"
+    task_prompt_provider: str = "gemini"
+    task_prompt_model: str = "gemini-2.5-flash"
+    task_tts_provider: str = "edge_tts"
+    task_tts_voice: str = "nl-NL-FennaNeural"
+    task_whisper_provider: str = "groq_whisper"
+    task_image_provider: str = "gemini_imagen"
+    task_image_model: str = "imagen-3.0-generate-002"
+    task_video_provider: str = "local_2_5d"
+    task_video_model: str = "veo-2.0-generate-001"
+
     # Ollama
     ollama_base_url: str = "http://host.docker.internal:11434"
 

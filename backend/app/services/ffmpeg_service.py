@@ -891,10 +891,9 @@ class FFmpegService:
                         or sc.get("background_image_path")
                     )
                     if not img_path:
-                        from app.services.image_service import image_service
-
-                        img_path = image_service._create_placeholder_image(
-                            sc.get("title", f"Scène {idx + 1}"), width=w, height=h
+                        raise RuntimeError(
+                            f"Scène {idx + 1} ('{sc.get('title', 'Zonder titel')}') heeft geen geldige Start-Frame afbeelding op schijf. "
+                            f"Genereer of upload eerst een afbeelding voor deze scène in de studio."
                         )
 
                     await self._scene_clip(

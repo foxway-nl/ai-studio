@@ -17,6 +17,7 @@ from app.api.direct_routes import router as direct_router
 from app.api.episodes import router as episodes_router
 from app.api.events import router as events_router
 from app.api.generate import router as generate_router
+from app.api.models_manager import router as models_manager_router
 from app.api.projects import router as projects_router
 from app.api.publish import router as publish_router
 from app.api.render import router as render_router
@@ -101,6 +102,7 @@ app.mount("/media", StaticFiles(directory=str(settings.media_dir)), name="media"
 
 # Registreer routers
 app.include_router(setup_router)
+app.include_router(models_manager_router)
 app.include_router(projects_router)
 app.include_router(characters_router)
 app.include_router(episodes_router)

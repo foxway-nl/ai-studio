@@ -26,6 +26,8 @@ router = APIRouter(prefix="/api/setup", tags=["Setup"])
 # Sleutels die gemaskeerd moeten worden in de UI
 _SENSITIVE_KEYS = {
     "gemini_api_key",
+    "groq_api_key",
+    "hf_token",
     "google_tts_api_key",
     "youtube_client_secret",
     "app_secret_key",
@@ -210,12 +212,60 @@ async def _check_youtube() -> ServiceStatus:
     return status
 
 
+async def _check_groq() -> ServiceStatus:
+    """Controleer Groq Cloud Free Tier verbinding."""
+    from app.services.groq_service import groq_service
+
+    key = groq_service.get_api_key()
+    status = ServiceStatus(
+        name="Groq Cloud",
+        instructions_nl="Gratis snelheidskanon voor Llama 3.3 70B & Whisper. Maak een gratis sleutel op console.groq.com/keys.",
+    )
+    if not key:
+        return status
+    status.configured = True
+    res = await groq_service.check_connection(key)
+    status.connected = res.get("connected", False)
+    if not status.connected:
+        status.error = res.get("error") or "Ongeldige Groq API-sleutel"
+    return status
+
+
+async def _check_huggingface() -> ServiceStatus:
+    """Controleer Hugging Face Free Tier & ZeroGPU verbinding."""
+    from app.services.huggingface_service import huggingface_service
+
+    tok = huggingface_service.get_token()
+    status = ServiceStatus(
+        name="Hugging Face",
+        instructions_nl="Gratis FLUX.1-schnell beeldgeneratie & ZeroGPU video-animatie. Maak een gratis token op huggingface.co/settings/tokens.",
+    )
+    if not tok:
+        return status
+    status.configured = True
+    res = await huggingface_service.check_connection(tok)
+    status.connected = res.get("connected", False)
+    if not status.connected:
+        status.error = res.get("error") or "Ongeldig Hugging Face token"
+    return status
+
+
+async def _check_edge_tts() -> ServiceStatus:
+    """Controleer Microsoft Edge TTS beschikbaarheid."""
+    return ServiceStatus(
+        name="Edge TTS",
+        configured=True,
+        connected=True,
+        instructions_nl="Standaard actief & gratis: Hoogwaardige Nederlandse kinderstemmen (o.a. Fenna en Maarten).",
+    )
+
+
 _SERVICE_CHECKERS = {
     "gemini": _check_gemini,
+    "groq": _check_groq,
+    "huggingface": _check_huggingface,
+    "edge_tts": _check_edge_tts,
     "ollama": _check_ollama,
-    "sd_webui": _check_sd_webui,
-    "piper": _check_piper,
-    "kokoro": _check_kokoro,
     "youtube": _check_youtube,
 }
 

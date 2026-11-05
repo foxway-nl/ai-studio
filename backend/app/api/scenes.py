@@ -530,6 +530,14 @@ async def animate_scene(
                 duration_seconds=scene.duration_seconds or 8.0,
                 motion_type=scene.animation_type or "zoom_in",
             )
+        elif engine in ("hf", "hf_zerogpu", "zerogpu", "huggingface"):
+            from app.services.huggingface_service import huggingface_service
+
+            clip_path = await huggingface_service.generate_video_zerogpu(
+                image_path=start_frame,
+                motion_prompt=motion,
+                output_path=out_path,
+            )
         elif engine == "wan":
             clip_path = await video_animation_service.generate_wan_video(
                 image_path=start_frame,

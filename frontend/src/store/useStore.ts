@@ -98,6 +98,7 @@ interface StoreState {
 
   // ─── Generation Actions ──────────────────────────────────────────────────
   generateScript: (episodeId: string, topic: string, characterIds?: string[]) => Promise<string>;
+  generateViralIdeas: (episodeId: string, audience?: string) => Promise<string[]>;
   generateImage: (sceneId: string) => Promise<string>;
   generateAudio: (sceneId: string) => Promise<string>;
   generateBulkAudio: (episodeId: string) => Promise<string>;
@@ -504,6 +505,17 @@ export const useStore = create<StoreState>((set, get) => ({
     } catch {
       get().addToast('error', 'Kon script niet genereren');
       throw new Error('Failed to generate script');
+    }
+  },
+
+  generateViralIdeas: async (episodeId: string, audience?: string) => {
+    try {
+      get().addToast('info', 'AI bedenkt 5 virale concepten…');
+      const ideas = await api.generateViralIdeas(episodeId, audience || 'kids', 5);
+      return ideas;
+    } catch {
+      get().addToast('error', 'Kon ideeën niet ophalen');
+      return [];
     }
   },
 
